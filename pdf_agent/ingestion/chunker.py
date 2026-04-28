@@ -1,7 +1,7 @@
 """
 ingestion/chunker.py
 Responsibility: Split cleaned pages into section-aware chunks with max token budget.
-Inputs: List[ParsedPage]
+Inputs: List[ParsedPage] (expected to be enriched with section_title)
 Outputs: List[Chunk]
 Dependencies: config.py, logs/schema.py
 """
@@ -16,6 +16,7 @@ log = get_logger("ingestion.chunker")
 def chunk_pages(doc: ParsedDocument) -> List[Chunk]:
     """
     Splits cleaned and enriched pages into chunks.
+    Ensures each chunk carries the correct section metadata from the page.
     """
     doc_id = doc.filename.lower().replace(" ", "_").rsplit(".", 1)[0]
     pages = doc.pages
@@ -27,6 +28,7 @@ def chunk_pages(doc: ParsedDocument) -> List[Chunk]:
     total_chars = 0
     
     for page in pages:
+        # metadata.enrich_metadata identifies the section_title before this step
         section_title = page.section_title or "General"
         text = page.raw_text
         
@@ -37,7 +39,7 @@ def chunk_pages(doc: ParsedDocument) -> List[Chunk]:
             continue
             
         if len(text) <= CHUNK_SIZE:
-            # Single chunk for the page
+            # Single chunk for short pages
             new_chunk = Chunk(
                 chunk_id=f"{doc_id}_p{page.page_no}_c{global_chunk_idx}",
                 page_start=page.page_no,
@@ -51,7 +53,7 @@ def chunk_pages(doc: ParsedDocument) -> List[Chunk]:
             global_chunk_idx += 1
             total_chars += len(text)
         else:
-            # Sliding window sub-chunking
+            # Sliding window sub-chunking for longer pages
             start = 0
             while start < len(text):
                 end = start + CHUNK_SIZE
@@ -70,10 +72,9 @@ def chunk_pages(doc: ParsedDocument) -> List[Chunk]:
                 global_chunk_idx += 1
                 total_chars += len(chunk_text)
                 
-                # Advance window
+                # Advance window by stride (size - overlap)
                 start += (CHUNK_SIZE - CHUNK_OVERLAP)
                 
-                # If the remaining text is less than overlap or very small, we might be at the end
                 if start >= len(text):
                     break
 
