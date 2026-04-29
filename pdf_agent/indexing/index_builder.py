@@ -38,7 +38,7 @@ def build_index(chunks: List[Any], source_doc: str = "Unknown") -> Dict[str, Any
             # Flexible access for dataclass or dict
             c_id = getattr(chunk, 'chunk_id', None) or chunk.get('chunk_id')
             c_text = getattr(chunk, 'text', None) or chunk.get('text')
-            c_page = getattr(chunk, 'page_start', None) or chunk.get('page_start')
+            c_page = getattr(chunk, 'page', None) or chunk.get('page') or getattr(chunk, 'page_start', None) or chunk.get('page_start')
             c_section = getattr(chunk, 'section_title', None) or chunk.get('section_title')
             c_page_end = getattr(chunk, 'page_end', None) or chunk.get('page_end', c_page)
             c_chars = getattr(chunk, 'char_count', None) or chunk.get('char_count', len(c_text) if c_text else 0)
@@ -51,7 +51,7 @@ def build_index(chunks: List[Any], source_doc: str = "Unknown") -> Dict[str, Any
             metadatas.append({
                 "source_doc": source_doc,
                 "chunk_id": c_id,
-                "page_start": int(c_page),
+                "page": int(c_page),
                 "page_end": int(c_page_end),
                 "section_title": str(c_section or "General"),
                 "char_count": int(c_chars)

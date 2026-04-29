@@ -21,7 +21,8 @@ def call_llm(system_prompt: str, messages: List[Dict]) -> str:
         api_key = os.environ.get("GROQ_API_KEY")
         if not api_key:
             raise RuntimeError("GROQ_API_KEY not found. Check your .env file.")
-        client = Groq(api_key=api_key)
+        import httpx
+        client = Groq(api_key=api_key, http_client=httpx.Client())
         
         full_messages = [
             {"role": "system", "content": system_prompt},

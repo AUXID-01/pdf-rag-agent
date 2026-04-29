@@ -120,7 +120,7 @@ def evaluate(hits: List[Dict], query: str) -> GateResult:
         top_score = scores[0]
         median_score = scores[len(scores) // 2]
         
-        if top_score > RERANKER_THRESHOLD and median_score < 0.15:
+        if top_score > RERANKER_THRESHOLD and median_score < SCATTER_THRESHOLD:
             nearest = hits[0].get("section", "Unknown")
             page = hits[0].get("page", "?")
             result = GateResult(

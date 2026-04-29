@@ -11,6 +11,20 @@ from typing import List, Optional
 from logs.logger import get_logger
 from logs.schema import ParsedPage, ParsedDocument
 
+# Add this at the top of the file, after the imports
+KNOWN_SECTION_PATTERNS = [
+    "RBI continues with hawkish policy stance",
+    "RBI continues to remain cautious on inflation",
+    "RBI retains growth forecast",
+    "RBI likely to undertake OMO",
+    "No rate cut expected",
+    "Regulation and Supervision",
+    "Payment and Settlement Systems",
+    "Consumer Protection",
+    "Systemic Liquidity",
+    "inflation forecast",
+    "growth forecast",
+]
 log = get_logger("ingestion.metadata")
 
 # Regex for common heading patterns (Numbered: 1.1, Section 2, etc.)
@@ -70,62 +84,73 @@ def is_valid_section_title(text: str) -> bool:
 def detect_section(page: ParsedPage, prev_section: str = "General") -> str:
     """
     Detects the likely section title for a given page using heuristics.
-    Implements validation and fallback strategies.
+    Priority order:
+      1. Known section pattern match (fast, exact for this PDF type)
+      2. Structural patterns (numbered, ALL CAPS, Title Case)
+      3. First bold-like line heuristic (short, starts uppercase)
+      4. Fallback to previous section
     """
     lines = [line.strip() for line in page.text.split("\n") if line.strip()]
     if not lines:
         return prev_section
 
-    candidates = []
-    
-    # HEURISTIC 1 & 2: Structural patterns (Numbered, ALL CAPS, Title Case)
+    # PRIORITY 1 — Known section pattern match
+    # Scan every line for a known heading substring (case-insensitive)
     for line in lines:
-        is_pattern_match = False
-        
-        # Pattern 1: Numbered Match
+        for pattern in KNOWN_SECTION_PATTERNS:
+            if pattern.lower() in line.lower():
+                # Truncate to 80 chars max for clean citation display
+                clean = line.strip()[:80].rstrip(";:,")
+                log.info("section_known_pattern_match",
+                         page_number=page.page_number,
+                         section=clean)
+                return clean
+
+    # PRIORITY 2 — Structural patterns (numbered, ALL CAPS, Title Case)
+    candidates = []
+    for line in lines:
+        # Skip lines that are clearly dates or page numbers
+        if re.match(r"^\d{1,2}\s+\w+\s+\d{4}$", line):   # e.g. "06 October 2023"
+            continue
+        if re.match(r"^\d+$", line):                        # standalone page number
+            continue
+
+        is_match = False
         if RE_SECTION_NUM.match(line) and len(line) <= 80:
-            is_pattern_match = True
-        # Pattern 2: ALL CAPS heading
+            is_match = True
         elif 4 <= len(line) <= 80 and line.isupper() and len(line.split()) >= 2:
-            is_pattern_match = True
-        # Pattern 3: Title Case heading
+            is_match = True
         elif 4 <= len(line) <= 80 and line.istitle() and not line.endswith((".", ",")):
-            is_pattern_match = True
-            
-        if is_pattern_match:
+            is_match = True
+
+        if is_match:
             candidates.append(line)
 
-    # HEURISTIC 4: Also consider the very first non-empty line as a candidate
-    if lines and lines[0] not in candidates and len(lines[0]) <= 80:
-        candidates.append(lines[0])
-
-    # Filter candidates by quality
-    valid_candidates = []
-    for cand in candidates:
-        # Add this check before finalizing a section candidate
-        if len(cand.strip()) < 20 and cand.strip().endswith(":"):
-            log.info("section_candidate_rejected_fragment", 
-                    page_number=page.page_number, 
-                    rejected=cand)
-            continue
-            
-        if is_valid_section_title(cand):
-            valid_candidates.append(cand)
-        else:
-            log.info("section_candidate_rejected", page_number=page.page_number, rejected=cand)
-
-    # Selection & Fallback Logic (Requirement 5)
+    valid_candidates = [c for c in candidates if is_valid_section_title(c)]
     if valid_candidates:
-        # Prefer "nearby shorter heading candidate" (Requirement 5)
-        # We take the first valid one found (nearby start of page), 
-        # but if there are multiple, we pick the shortest one among them to avoid fragments.
-        # Here we just take the shortest of the first 2 candidates for a balance.
-        best_candidate = min(valid_candidates[:2], key=len)
-        log.info("section_title_finalized", page_number=page.page_number, section=best_candidate)
-        return best_candidate
+        best = min(valid_candidates[:2], key=len)
+        log.info("section_structural_match",
+                 page_number=page.page_number,
+                 section=best)
+        return best
 
-    # Use previous valid section or absolute fallback
-    log.info("section_fallback_used", page_number=page.page_number, fallback=prev_section)
+    # PRIORITY 3 — First short uppercase-starting line that isn't a date/number
+    for line in lines[:5]:   # only look at top 5 lines of page
+        if re.match(r"^\d{1,2}\s+\w+\s+\d{4}$", line):
+            continue
+        if re.match(r"^\d+$", line):
+            continue
+        if len(line) >= 8 and len(line) <= 80 and line[0].isupper():
+            clean = line.strip()[:80].rstrip(";:,")
+            log.info("section_first_line_heuristic",
+                     page_number=page.page_number,
+                     section=clean)
+            return clean
+
+    # PRIORITY 4 — Fallback to previous section
+    log.info("section_fallback_used",
+             page_number=page.page_number,
+             fallback=prev_section)
     return prev_section
 
 def enrich_metadata(doc: ParsedDocument) -> ParsedDocument:

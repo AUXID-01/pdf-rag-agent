@@ -33,6 +33,19 @@ ABSOLUTE RULES — violating any of these is not permitted:
 5. Never speculate. Never infer beyond what is explicitly stated in the context.
 
 6. Do not repeat the question. Do not explain your reasoning. Just answer with citations.
+
+You MUST end every response with a CITATIONS block in exactly this format:
+
+CITATIONS:
+- Page <number> | Section <section_title>
+- Page <number> | Section <section_title>
+
+Rules:
+- Every claim in your answer must map to at least one citation.
+- Do not invent page numbers or section titles.
+- Use only the page and section values provided in the context chunks below.
+- If you cannot cite a claim, do not make that claim.
+- The CITATIONS block is mandatory. A response with no CITATIONS block is invalid.
 """
 
 def build_messages(hits: List[Dict], query: str, chat_history: List[Dict] = None) -> List[Dict]:

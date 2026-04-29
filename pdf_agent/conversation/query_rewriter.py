@@ -100,7 +100,8 @@ def rewrite_query(query: str, chat_history: List[Dict]) -> str:
         if not api_key:
             raise RuntimeError("GROQ_API_KEY not found")
         
-        client = Groq(api_key=api_key)
+        import httpx
+        client = Groq(api_key=api_key, http_client=httpx.Client())
         
         user_message = f"""Conversation so far:
 {history_summary}

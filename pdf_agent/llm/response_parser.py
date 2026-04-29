@@ -1,90 +1,65 @@
-"""
-llm/response_parser.py
-Responsibility: Parses, validates, and if possible repairs LLM output.
-Enforces citation presence. Detects special signals.
-"""
-
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from typing import List
+
+@dataclass
+class Citation:
+    page: int
+    section: str
 
 @dataclass
 class ParsedResponse:
-    status: str          # "answered", "insufficient", "contradicted", "error", "uncited"
-    answer: str          # Final answer text shown to user
-    has_citations: bool  # True if at least one valid [Page X | Section Y] found
-    citation_count: int  # Number of citations found
-    raw: str             # Original LLM output for trace/debug
+    answer_text: str
+    citations: List[Citation]
+    is_valid: bool  # False if no citations found
 
-# Pattern requires both page number AND section name
-FULL_CITATION_PATTERN = re.compile(r'\[Page \d+ \| Section .+?\]')
-
-# Loose pattern — catches page-only citations like [Page 2]
-LOOSE_CITATION_PATTERN = re.compile(r'\[Page \d+\]|\(Page \d+\)')
-
-def parse_response(raw: str) -> ParsedResponse:
+def parse_llm_response(raw_response: str) -> ParsedResponse:
     """
-    Validates LLM output and returns a structured response object.
-    Distinguishes between properly cited, loosely cited, and uncited answers.
+    Splits LLM output into answer body and citation list.
+    Returns is_valid=False if no CITATIONS block is found.
     """
-    if not raw or not raw.strip():
-        return ParsedResponse(
-            status="error",
-            answer="The model returned an empty response. Please try again.",
-            has_citations=False,
-            citation_count=0,
-            raw=raw or ""
-        )
-
-    stripped = raw.strip()
-
-    # Check for special signals first
-    if "INSUFFICIENT_CONTEXT" in stripped:
-        return ParsedResponse(
-            status="insufficient",
-            answer="The document does not contain enough information to answer this question.",
-            has_citations=False,
-            citation_count=0,
-            raw=raw
-        )
-
-    if "CONTRADICTED_BY_DOCUMENT" in stripped:
-        return ParsedResponse(
-            status="contradicted",
-            answer="The premise of your question appears to contradict what the document states.",
-            has_citations=False,
-            citation_count=0,
-            raw=raw
-        )
-
-    # Check for full citations [Page X | Section Y]
-    full_citations = FULL_CITATION_PATTERN.findall(stripped)
+    citation_pattern = re.compile(
+        r"CITATIONS:\s*((?:-\s*Page\s*\d+\s*\|\s*Section\s*.+\n?)+)",
+        re.IGNORECASE
+    )
     
-    if full_citations:
-        return ParsedResponse(
-            status="answered",
-            answer=stripped,
-            has_citations=True,
-            citation_count=len(full_citations),
-            raw=raw
-        )
-
-    # Check for loose citations [Page X] — answer exists but format is wrong
-    loose_citations = LOOSE_CITATION_PATTERN.findall(stripped)
+    match = citation_pattern.search(raw_response)
     
-    if loose_citations:
+    if not match:
         return ParsedResponse(
-            status="uncited",
-            answer=stripped,
-            has_citations=False,
-            citation_count=0,
-            raw=raw
+            answer_text=raw_response.strip(),
+            citations=[],
+            is_valid=False
         )
-
-    # No citations at all
+    
+    answer_text = raw_response[:match.start()].strip()
+    citation_block = match.group(1)
+    
+    seen = set()
+    citations = []
+    for line in citation_block.strip().splitlines():
+        line = line.strip().lstrip("-").strip()
+        if not line:
+            continue
+        parts = line.split("|", 1)
+        if len(parts) != 2:
+            continue
+        try:
+            page_num = int(re.search(r"\d+", parts[0]).group())
+            section_raw = parts[1].strip()
+            section = re.sub(r"^Section\s+", "", section_raw, flags=re.IGNORECASE).strip()
+            
+            key = (page_num, section.lower())
+            if key in seen:
+                continue
+            seen.add(key)
+            
+            citations.append(Citation(page=page_num, section=section))
+        except (AttributeError, ValueError):
+            continue
+    
     return ParsedResponse(
-        status="uncited",
-        answer=stripped,
-        has_citations=False,
-        citation_count=0,
-        raw=raw
+        answer_text=answer_text,
+        citations=citations,
+        is_valid=len(citations) > 0
     )

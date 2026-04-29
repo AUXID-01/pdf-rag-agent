@@ -13,7 +13,9 @@ from retrieval.hallucination_gate import evaluate, GateResult
 from retrieval.reranker import rerank
 from llm.prompt_builder import build_messages, SYSTEM_PROMPT
 from llm.groq_client import call_llm
-from llm.response_parser import parse_response
+from llm.response_parser import parse_llm_response
+from llm.gate2_checker import validate_citations_against_chunks
+from ui.citation_card import render_citation_chips, render_refusal_chip
 from conversation.query_rewriter import rewrite_query
 
 
@@ -201,64 +203,37 @@ if prompt := st.chat_input("Ask a question about the document"):
                     with st.spinner("Generating grounded answer..."):
                         try:
                             messages = build_messages(query=prompt, hits=gate.hits)
-                            raw = call_llm(system_prompt=SYSTEM_PROMPT, messages=messages)
-                            parsed = parse_response(raw)
-                            add_trace(
-                                f"LLM status: {parsed.status} | "
-                                f"citations: {parsed.has_citations} | "
-                                f"citation_count: {parsed.citation_count}"
-                            )
+                            raw_answer = call_llm(system_prompt=SYSTEM_PROMPT, messages=messages)
+                            parsed = parse_llm_response(raw_answer)
+                            gate2_result = validate_citations_against_chunks(parsed, gate.hits)
 
-                            if parsed.status == "answered":
-                                st.markdown(parsed.answer)
+                            if not gate2_result["passed"]:
+                                st.warning(
+                                    f"The system could not produce a verifiable cited answer. "
+                                    f"Reason: {gate2_result['reason']}"
+                                )
+                                render_refusal_chip()
+                            else:
+                                st.markdown(parsed.answer_text)
+                                render_citation_chips(parsed.citations)
                                 render_retrieval_hits(gate.hits)
+
+                            # Append to session history only if gate2 passed
+                            if gate2_result["passed"]:
                                 st.session_state.chat_history.append({
                                     "role": "assistant",
-                                    "content": parsed.answer,
+                                    "content": parsed.answer_text,
+                                    "citations": [
+                                        {"page": c.page, "section": c.section}
+                                        for c in parsed.citations
+                                    ],
                                     "hits": gate.hits
                                 })
-
-                            elif parsed.status == "uncited":
-                                st.markdown(parsed.answer)
-                                st.caption(
-                                    "⚠️ Note: This answer was generated from the document "
-                                    "but citations could not be verified in the expected format."
-                                )
-                                render_retrieval_hits(gate.hits)
+                            else:
                                 st.session_state.chat_history.append({
                                     "role": "assistant",
-                                    "content": parsed.answer,
-                                    "hits": gate.hits
-                                })
-
-                            elif parsed.status == "insufficient":
-                                st.warning(
-                                    "The document does not contain enough information "
-                                    "to answer this question."
-                                )
-                                st.session_state.chat_history.append({
-                                    "role": "assistant",
-                                    "content": parsed.answer
-                                })
-
-                            elif parsed.status == "contradicted":
-                                st.warning(
-                                    "The premise of your question appears to contradict "
-                                    "what the document states."
-                                )
-                                st.session_state.chat_history.append({
-                                    "role": "assistant",
-                                    "content": parsed.answer
-                                })
-
-                            elif parsed.status == "error":
-                                st.error(
-                                    "The model returned an unexpected response. "
-                                    "Please try again."
-                                )
-                                st.session_state.chat_history.append({
-                                    "role": "assistant",
-                                    "content": parsed.answer
+                                    "content": "[Response blocked — citation validation failed]",
+                                    "citations": []
                                 })
 
                             add_trace("LLM response generated successfully")

@@ -34,7 +34,7 @@ def chunk_pages(doc: ParsedDocument) -> List[Dict]:
             # Single chunk for short pages
             new_chunk = {
                 "chunk_id": f"{doc_id}_p{page.page_number}_c{global_chunk_idx}",
-                "page_start": page.page_number,
+                "page": page.page_number,
                 "page_end": page.page_number,
                 "section_title": section_title,
                 "source_doc": doc_id,
@@ -53,7 +53,7 @@ def chunk_pages(doc: ParsedDocument) -> List[Dict]:
                 
                 new_chunk = {
                     "chunk_id": f"{doc_id}_p{page.page_number}_c{global_chunk_idx}",
-                    "page_start": page.page_number,
+                    "page": page.page_number,
                     "page_end": page.page_number,
                     "section_title": section_title,
                     "source_doc": doc_id,
