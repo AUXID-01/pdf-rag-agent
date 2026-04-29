@@ -33,7 +33,14 @@ def build_trace(
         "gate_decision": "PASS" if gate_result.passed else "FAIL",
         "gate_reason": gate_result.reason,
         "response_type": response_type,
-        "citations": citations
+        "citations": citations,
+        # PHASE 13 — OCR TRACE
+        "ocr_used": any(h.get("ocr_quality") != "good" for h in hits) if hits else False,
+        "ocr_quality": "low" if any(h.get("ocr_quality") == "low" for h in hits) else "good",
+        # PHASE 14 — RERANK TRACE
+        "reranked": True,
+        "top_score": top_score,
+        "scores": [h.get("score", 0.0) for h in retrieval_hits]
     }
     
     return trace

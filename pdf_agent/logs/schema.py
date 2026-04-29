@@ -24,6 +24,8 @@ class ParsedDocument:
     filename: str
     total_pages: int
     pages: List[ParsedPage]
+    low_quality_ocr: bool = False
+    ocr_used: bool = False
 
 @dataclass
 class Chunk:
@@ -34,6 +36,7 @@ class Chunk:
     source_doc: str
     text: str
     char_count: int = 0
+    ocr_quality: str = "good"
 
 @dataclass
 class LogEvent:

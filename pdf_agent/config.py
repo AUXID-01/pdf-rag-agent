@@ -15,9 +15,9 @@ LOG_FILE = "data/logs/agent.jsonl"
 UPLOAD_DIR = "data/uploads"
 
 # Reranker
-RERANKER_MODEL = "cross-encoder/ms-marco-MiniLM-L-6-v2"
+RERANKER_MODEL = "all-MiniLM-L6-v2"  # Transitioning to bi-encoder for speed in Phase 14
 RERANKER_TOP_K = 5
-RERANKER_THRESHOLD = 0.20
+RERANKER_THRESHOLD = 0.25
 
 # Session State Keys
 SESSION_KEYS = {
@@ -29,7 +29,8 @@ SESSION_KEYS = {
     "last_retrievals": [],
     "current_turn_id": None,
     "chunk_count": 0,
-    "last_index_summary": None
+    "last_index_summary": None,
+    "low_quality_ocr": False
 }
 
 def ensure_project_dirs():

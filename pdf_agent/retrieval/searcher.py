@@ -132,6 +132,7 @@ def search_query(query: str, doc_id: Optional[str] = None, top_k: int = TOP_K) -
                     "distance": float(distances[i]),
                     "page": meta.get("page_start"),
                     "section": meta.get("section_title"),
+                    "ocr_quality": meta.get("ocr_quality", "good"),
                     "doc_id": actual_doc
                 })
 

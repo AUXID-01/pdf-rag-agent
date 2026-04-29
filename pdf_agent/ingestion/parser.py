@@ -98,6 +98,7 @@ def parse_pdf(pdf_path: str) -> ParsedDocument:
     # Tier 1: PyMuPDF
     result_pages = _parse_with_pymupdf(pdf_path)
     avg_chars = sum(len(p.text) for p in result_pages) / max(len(result_pages), 1)
+    ocr_used = False
 
     # Tier 2 Fallback: pdfplumber
     if avg_chars < 150:
@@ -109,15 +110,25 @@ def parse_pdf(pdf_path: str) -> ParsedDocument:
     if avg_chars < 150:
         log.warning("parser_fallback_ocr", avg_chars=avg_chars)
         result_pages = _parse_with_ocr(pdf_path)
+        avg_chars = sum(len(p.text) for p in result_pages) / max(len(result_pages), 1)
+        ocr_used = True
 
     if not result_pages:
         raise ValueError(f"Failed to extract any text from PDF: {pdf_path}")
+
+    # PHASE 13 — OCR QUALITY CHECK
+    low_quality_ocr = False
+    if ocr_used and avg_chars < 100:
+        log.warning("low_quality_ocr_detected", avg_chars=avg_chars)
+        low_quality_ocr = True
 
     parsed_doc = ParsedDocument(
         source_path=pdf_path,
         filename=os.path.basename(pdf_path),
         total_pages=len(result_pages),
-        pages=result_pages
+        pages=result_pages,
+        low_quality_ocr=low_quality_ocr,
+        ocr_used=ocr_used
     )
 
     log.info("parse_complete", total_pages=len(result_pages))

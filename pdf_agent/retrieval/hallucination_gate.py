@@ -82,6 +82,15 @@ def evaluate(hits: List[Dict], query: str) -> GateResult:
         return result
         
     similarities = [1.0 - hit.get("distance", 1.0) for hit in hits]
+    
+    # PHASE 13 — OCR QUALITY CONFIDENCE ADJUSTMENT
+    ocr_low_hits = [h for h in hits if h.get("ocr_quality") == "low"]
+    if ocr_low_hits:
+        # Apply a 20% penalty to similarities if the content is low-quality OCR
+        # This increases likelihood of refusal for noisy/scanned content
+        similarities = [s * 0.8 if hits[i].get("ocr_quality") == "low" else s for i, s in enumerate(similarities)]
+        log.warning("gate_ocr_penalty_applied", count=len(ocr_low_hits))
+
     best_similarity = max(similarities)
     best_hit = hits[similarities.index(best_similarity)]
     

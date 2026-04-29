@@ -42,6 +42,7 @@ def build_index(chunks: List[Any], source_doc: str = "Unknown") -> Dict[str, Any
             c_section = getattr(chunk, 'section_title', None) or chunk.get('section_title')
             c_page_end = getattr(chunk, 'page_end', None) or chunk.get('page_end', c_page)
             c_chars = getattr(chunk, 'char_count', None) or chunk.get('char_count', len(c_text) if c_text else 0)
+            c_ocr = getattr(chunk, 'ocr_quality', None) or chunk.get('ocr_quality', 'good')
 
             if not c_id or not c_text or c_page is None:
                 continue
@@ -54,7 +55,8 @@ def build_index(chunks: List[Any], source_doc: str = "Unknown") -> Dict[str, Any
                 "page": int(c_page),
                 "page_end": int(c_page_end),
                 "section_title": str(c_section or "General"),
-                "char_count": int(c_chars)
+                "char_count": int(c_chars),
+                "ocr_quality": c_ocr
             })
             valid_chunks.append(chunk)
 

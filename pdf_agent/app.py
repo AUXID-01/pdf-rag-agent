@@ -65,6 +65,7 @@ with st.sidebar:
             st.session_state.chunk_count = 0
             st.session_state.last_index_summary = None
             st.session_state.last_retrievals = []
+            st.session_state.low_quality_ocr = False
             st.success(f"File uploaded: {uploaded_file.name}")
 
     st.markdown("---")
@@ -83,6 +84,7 @@ with st.sidebar:
                 st.session_state.indexed = True
                 st.session_state.chunk_count = summary.get("indexed_chunk_count", 0)
                 st.session_state.last_index_summary = summary
+                st.session_state.low_quality_ocr = parsed.low_quality_ocr
                 
             except Exception as e:
                 st.error(f"Ingestion failed: {e}")
@@ -97,6 +99,8 @@ with st.sidebar:
         st.warning("Ready to index")
     else:
         st.success(f"✅ Indexed {st.session_state.chunk_count} chunks from {st.session_state.uploaded_doc}")
+        if st.session_state.low_quality_ocr:
+            st.warning("⚠️ This document appears to be scanned and may have limited extractable text. Answers may be incomplete.")
 
     # PHASE 11: Trace Panel UI
     st.markdown("---")
@@ -125,6 +129,9 @@ with st.sidebar:
                 st.markdown("---")
                 st.markdown(f"**Output:**")
                 st.markdown(f"Type: {t['response_type']}")
+                if t.get("ocr_used"):
+                    quality_color = "red" if t.get("ocr_quality") == "low" else "green"
+                    st.markdown(f"OCR: :{quality_color}[{t['ocr_quality'].upper()}]")
                 if t['citations']:
                     st.markdown("Citations:")
                     for c in t['citations']:
@@ -202,9 +209,13 @@ if prompt := st.chat_input("Ask a question about the document"):
                 hits = search_query(
                     query=retrieval_query,
                     doc_id=st.session_state.uploaded_doc,
-                    top_k=20
+                    top_k=8
                 )
-                hits = rerank(query=retrieval_query, hits=hits)
+                hits = rerank(
+                    query=retrieval_query, 
+                    hits=hits, 
+                    is_followup=rewrite_result["was_rewritten"]
+                )
 
                 gate: GateResult = evaluate(hits=hits, query=retrieval_query)
                 st.session_state.last_retrievals = gate.hits

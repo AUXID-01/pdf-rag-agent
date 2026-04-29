@@ -220,12 +220,15 @@ def enrich_metadata(doc: ParsedDocument) -> ParsedDocument:
     current_section = "General"
     
     for page in doc.pages:
-        # Statefully track section content
-        current_section = detect_section(page, current_section)
-        # Passing page text to allow keyword inference if section is messy
-        page.section_title = clean_section_title(current_section, page.text)
-        # Update current_section for the next page to use the sanitized version
-        current_section = page.section_title
+        if doc.low_quality_ocr:
+            page.section_title = "Scanned Content"
+        else:
+            # Statefully track section content
+            current_section = detect_section(page, current_section)
+            # Passing page text to allow keyword inference if section is messy
+            page.section_title = clean_section_title(current_section, page.text)
+            # Update current_section for the next page to use the sanitized version
+            current_section = page.section_title
         
     log.info("enrichment_complete", filename=doc.filename)
     return doc

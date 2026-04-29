@@ -19,6 +19,18 @@ def chunk_pages(doc: ParsedDocument) -> List[Dict]:
     global_chunk_idx = 0
     total_chars = 0
     
+    # PHASE 13 — OCR QUALITY ADJUSTMENTS
+    chunk_limit = CHUNK_SIZE
+    overlap_limit = CHUNK_OVERLAP
+    ocr_quality = "good"
+
+    if doc.low_quality_ocr:
+        # Smaller chunks for low-quality OCR text - help keep noisy context atomic
+        chunk_limit = 150
+        overlap_limit = 50
+        ocr_quality = "low"
+        log.warning("chunking_low_quality_ocr", source_doc=doc_id, chunk_size=chunk_limit)
+
     for page in pages:
         # metadata.enrich_metadata identifies the section_title before this step
         section_title = page.section_title or "General"
@@ -30,7 +42,7 @@ def chunk_pages(doc: ParsedDocument) -> List[Dict]:
             log.warning("empty_page_skip", page_number=page.page_number)
             continue
             
-        if len(text) <= CHUNK_SIZE:
+        if len(text) <= chunk_limit:
             # Single chunk for short pages
             new_chunk = {
                 "chunk_id": f"{doc_id}_p{page.page_number}_c{global_chunk_idx}",
@@ -39,7 +51,8 @@ def chunk_pages(doc: ParsedDocument) -> List[Dict]:
                 "section_title": section_title,
                 "source_doc": doc_id,
                 "text": text,
-                "char_count": len(text)
+                "char_count": len(text),
+                "ocr_quality": ocr_quality
             }
             page_chunks.append(new_chunk)
             global_chunk_idx += 1
@@ -48,7 +61,7 @@ def chunk_pages(doc: ParsedDocument) -> List[Dict]:
             # Sliding window sub-chunking for longer pages
             start = 0
             while start < len(text):
-                end = start + CHUNK_SIZE
+                end = start + chunk_limit
                 chunk_text = text[start:end]
                 
                 new_chunk = {
@@ -58,14 +71,15 @@ def chunk_pages(doc: ParsedDocument) -> List[Dict]:
                     "section_title": section_title,
                     "source_doc": doc_id,
                     "text": chunk_text,
-                    "char_count": len(chunk_text)
+                    "char_count": len(chunk_text),
+                    "ocr_quality": ocr_quality
                 }
                 page_chunks.append(new_chunk)
                 global_chunk_idx += 1
                 total_chars += len(chunk_text)
                 
                 # Advance window by stride (size - overlap)
-                start += (CHUNK_SIZE - CHUNK_OVERLAP)
+                start += (chunk_limit - overlap_limit)
                 
                 if start >= len(text):
                     break
