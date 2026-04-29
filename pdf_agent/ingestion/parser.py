@@ -22,7 +22,10 @@ def _parse_with_pymupdf(pdf_path: str) -> List[ParsedPage]:
         log.error("pymupdf_open_failed", path=pdf_path, error=str(e))
         return []
 
+    from ingestion.ocr_handler import extract_text_with_ocr
     parsed_pages = []
+    ocr_used_on_pages = 0
+
     for i, page in enumerate(doc):
         raw_blocks = page.get_text("blocks")
         page_blocks = []
@@ -42,12 +45,26 @@ def _parse_with_pymupdf(pdf_path: str) -> List[ParsedPage]:
             })
             block_texts.append(text)
         
+        page_text = "\n".join(block_texts)
+        
+        # PER-PAGE OCR FALLBACK (Phase 16)
+        if len(page_text.strip()) < 50:
+            log.warning("low_text_per_page_fallback", page_number=i+1, chars=len(page_text))
+            ocr_text = extract_text_with_ocr(page)
+            if len(ocr_text) > len(page_text):
+                page_text = ocr_text
+                ocr_used_on_pages += 1
+                # Update blocks to show this is now OCR-sourced
+                page_blocks = [{"text": ocr_text, "type": "ocr_text"}]
+
         parsed_pages.append(ParsedPage(
             page_number=i + 1,
-            text="\n".join(block_texts),
+            text=page_text,
             blocks=page_blocks
         ))
     doc.close()
+    if ocr_used_on_pages > 0:
+        log.info("pymupdf_ocr_fallback_summary", ocr_pages=ocr_used_on_pages)
     return parsed_pages
 
 def _parse_with_pdfplumber(pdf_path: str) -> List[ParsedPage]:

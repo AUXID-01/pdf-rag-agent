@@ -79,8 +79,15 @@ with st.sidebar:
                 parsed = parse_pdf(file_path)
                 cleaned = clean_pages(parsed)
                 enriched = enrich_metadata(cleaned)
-                chunks = chunk_pages(enriched)
-                summary = build_index(chunks, source_doc=st.session_state.uploaded_doc)
+                text_chunks = chunk_pages(enriched)
+                
+                # PHASE 15 — TABLE EXTRACTION
+                from ingestion.table_extractor import extract_tables
+                table_chunks = extract_tables(enriched)
+                
+                all_chunks = text_chunks + table_chunks
+                
+                summary = build_index(all_chunks, source_doc=st.session_state.uploaded_doc)
                 st.session_state.indexed = True
                 st.session_state.chunk_count = summary.get("indexed_chunk_count", 0)
                 st.session_state.last_index_summary = summary
