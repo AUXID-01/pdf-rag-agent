@@ -10,7 +10,7 @@ EMBEDDING_MODEL = "all-MiniLM-L6-v2"
 LLM_MODEL = "llama-3.3-70b-versatile"
 LLM_MAX_TOKENS = 1024
 CITATION_FORMAT = "Page {page} | Section {section}"
-LOG_LEVEL = "DEBUG"
+LOG_LEVEL = "INFO"
 LOG_FILE = "data/logs/agent.jsonl"
 UPLOAD_DIR = "data/uploads"
 

@@ -82,6 +82,11 @@ def get_logger(name: str):
     root_logger.handlers = [file_handler, console_handler]
     root_logger.setLevel(level)
 
+    # Silence noisy libraries
+    logging.getLogger("pdfminer").setLevel(logging.WARNING)
+    logging.getLogger("urllib3").setLevel(logging.INFO)
+    logging.getLogger("chromadb").setLevel(logging.INFO)
+
     return structlog.get_logger(name)
 
 def log_event(event: 'LogEvent'):
