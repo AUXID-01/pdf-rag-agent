@@ -22,7 +22,7 @@ def clean_pages(doc: ParsedDocument) -> ParsedDocument:
     # Build frequency map for repeated lines across all pages
     all_lines = []
     for page in pages:
-        all_lines.extend([line.strip() for line in page.raw_text.split("\n") if line.strip()])
+        all_lines.extend([line.strip() for line in page.text.split("\n") if line.strip()])
     
     line_counts = Counter(all_lines)
     repeated_lines = {line for line, count in line_counts.items() if count >= 3}
@@ -37,8 +37,8 @@ def clean_pages(doc: ParsedDocument) -> ParsedDocument:
     cleaned_pages = []
 
     for page in pages:
-        chars_before = len(page.raw_text)
-        lines = page.raw_text.split("\n")
+        chars_before = len(page.text)
+        lines = page.text.split("\n")
         lines_before = len(lines)
         
         cleaned_lines = []
@@ -72,7 +72,7 @@ def clean_pages(doc: ParsedDocument) -> ParsedDocument:
 
         log.info(
             "page_cleaned", 
-            page_no=page.page_no, 
+            page_number=page.page_number, 
             chars_before=chars_before, 
             chars_after=chars_after, 
             lines_removed=lines_removed
@@ -80,8 +80,8 @@ def clean_pages(doc: ParsedDocument) -> ParsedDocument:
 
         cleaned_pages.append(
             ParsedPage(
-                page_no=page.page_no,
-                raw_text=raw_text_cleaned,
+                page_number=page.page_number,
+                text=raw_text_cleaned,
                 blocks=page.blocks
             )
         )

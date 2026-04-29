@@ -1,7 +1,7 @@
 from dataclasses import dataclass
 from typing import List, Dict, Optional
 from logs.logger import get_logger
-from config import SIMILARITY_THRESHOLD, SCATTER_THRESHOLD
+from config import SIMILARITY_THRESHOLD, SCATTER_THRESHOLD, RERANKER_THRESHOLD
 
 log = get_logger("retrieval.hallucination_gate")
 
@@ -48,18 +48,38 @@ def evaluate(hits: List[Dict], query: str) -> GateResult:
     
     nearest_hint = f"The closest content found was in **Page {page}**, Section **{nearest_topic}** \u2014 but it does not directly answer your question.\n\n"
     
-    if best_similarity < SIMILARITY_THRESHOLD:
-        message = REFUSAL_TEMPLATE.format(query_topic=query, nearest_hint=nearest_hint)
-        result = GateResult(
-            passed=False,
-            reason="LOW_CONFIDENCE",
-            message=message,
-            hits=[],
-            best_similarity=best_similarity,
-            nearest_topic=nearest_topic
-        )
-        log.info("gate_result", passed=result.passed, reason=result.reason, best_sim=result.best_similarity)
-        return result
+    # Rule 2 — CrossEncoder Score Gate
+    # After reranking, hits carry rerank_score (higher = better)
+    # If top reranked chunk is below threshold, refuse
+    best_score = hits[0].get("rerank_score", None)
+
+    if best_score is None:
+        # Reranker did not run — fall back to similarity check
+        best_similarity = 1 - hits[0]["distance"]
+        if best_similarity < SIMILARITY_THRESHOLD:
+            result = GateResult(
+                passed=False,
+                reason="LOW_CONFIDENCE",
+                message=REFUSAL_TEMPLATE.format(query_topic=query, nearest_hint=nearest_hint),
+                hits=[],
+                best_similarity=best_similarity,
+                nearest_topic=hits[0].get("section")
+            )
+            log.info("gate_result", passed=result.passed, reason=result.reason, best_sim=result.best_similarity)
+            return result
+    else:
+        best_similarity = best_score
+        if best_score < RERANKER_THRESHOLD:
+            result = GateResult(
+                passed=False,
+                reason="LOW_CONFIDENCE",
+                message=REFUSAL_TEMPLATE.format(query_topic=query, nearest_hint=nearest_hint),
+                hits=[],
+                best_similarity=best_score,
+                nearest_topic=hits[0].get("section")
+            )
+            log.info("gate_result", passed=result.passed, reason=result.reason, best_sim=result.best_similarity)
+            return result
         
     # Rule 2B — Assertion Gate
     # If query contains a strong factual claim phrased as established truth,

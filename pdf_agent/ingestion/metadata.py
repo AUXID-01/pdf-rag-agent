@@ -72,7 +72,7 @@ def detect_section(page: ParsedPage, prev_section: str = "General") -> str:
     Detects the likely section title for a given page using heuristics.
     Implements validation and fallback strategies.
     """
-    lines = [line.strip() for line in page.raw_text.split("\n") if line.strip()]
+    lines = [line.strip() for line in page.text.split("\n") if line.strip()]
     if not lines:
         return prev_section
 
@@ -102,10 +102,17 @@ def detect_section(page: ParsedPage, prev_section: str = "General") -> str:
     # Filter candidates by quality
     valid_candidates = []
     for cand in candidates:
+        # Add this check before finalizing a section candidate
+        if len(cand.strip()) < 20 and cand.strip().endswith(":"):
+            log.info("section_candidate_rejected_fragment", 
+                    page_number=page.page_number, 
+                    rejected=cand)
+            continue
+            
         if is_valid_section_title(cand):
             valid_candidates.append(cand)
         else:
-            log.info("section_candidate_rejected", page_no=page.page_no, rejected=cand)
+            log.info("section_candidate_rejected", page_number=page.page_number, rejected=cand)
 
     # Selection & Fallback Logic (Requirement 5)
     if valid_candidates:
@@ -114,11 +121,11 @@ def detect_section(page: ParsedPage, prev_section: str = "General") -> str:
         # but if there are multiple, we pick the shortest one among them to avoid fragments.
         # Here we just take the shortest of the first 2 candidates for a balance.
         best_candidate = min(valid_candidates[:2], key=len)
-        log.info("section_title_finalized", page_no=page.page_no, section=best_candidate)
+        log.info("section_title_finalized", page_number=page.page_number, section=best_candidate)
         return best_candidate
 
     # Use previous valid section or absolute fallback
-    log.info("section_fallback_used", page_no=page.page_no, fallback=prev_section)
+    log.info("section_fallback_used", page_number=page.page_number, fallback=prev_section)
     return prev_section
 
 def enrich_metadata(doc: ParsedDocument) -> ParsedDocument:

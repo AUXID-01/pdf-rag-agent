@@ -13,8 +13,8 @@ from typing import List, Optional
 
 @dataclass
 class ParsedPage:
-    page_no: int
-    raw_text: str
+    page_number: int
+    text: str
     blocks: List[dict] = field(default_factory=list)
     section_title: Optional[str] = None
 
@@ -68,3 +68,10 @@ class RefusalObject:
     query: str
     nearest_topic: Optional[str] = None
     nearest_page: Optional[int] = None
+
+@dataclass
+class ParsedResponse:
+    status: str
+    answer: str
+    has_citations: bool = False
+    citations: List[dict] = field(default_factory=list)

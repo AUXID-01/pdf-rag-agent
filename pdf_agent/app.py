@@ -10,6 +10,10 @@ from ingestion.chunker import chunk_pages
 from indexing.index_builder import build_index
 from retrieval.searcher import search_query
 from retrieval.hallucination_gate import evaluate, GateResult
+from retrieval.reranker import rerank
+from llm.prompt_builder import build_messages, SYSTEM_PROMPT
+from llm.groq_client import call_llm
+from llm.response_parser import parse_response
 
 # 1. Page Configuration
 st.set_page_config(
@@ -171,23 +175,70 @@ if prompt := st.chat_input("Ask a question about the document"):
                 hits = search_query(
                     query=prompt,
                     doc_id=st.session_state.uploaded_doc,
-                    top_k=5
+                    top_k=20  # Wide net for reranker
                 )
+                hits = rerank(query=prompt, hits=hits)
+                if hits:
+                    add_trace(f"Reranked to {len(hits)} chunks | top score: {hits[0]['rerank_score']:.3f}")
+                else:
+                    add_trace("Rerank returned empty", level="WARNING")
 
                 gate: GateResult = evaluate(hits=hits, query=prompt)
                 st.session_state.last_retrievals = gate.hits
                 add_trace(f"Gate decision: {gate.reason} | best_sim={gate.best_similarity:.3f}")
 
                 if gate.passed:
-                    response = "I have successfully retrieved relevant context from the document."
-                    st.markdown(response)
-                    render_retrieval_hits(gate.hits)
-                    st.session_state.chat_history.append({
-                        "role": "assistant",
-                        "content": response,
-                        "hits": gate.hits
-                    })
-                    add_trace(f"Retrieved {len(gate.hits)} chunks — gate passed")
+                    with st.spinner("Generating grounded answer..."):
+                        try:
+                            messages = build_messages(query=prompt, hits=gate.hits)
+                            raw = call_llm(system_prompt=SYSTEM_PROMPT, messages=messages)
+                            parsed = parse_response(raw)
+                            add_trace(f"LLM status: {parsed.status} | citations: {parsed.has_citations}")
+
+                            if parsed.status == "answered" and parsed.has_citations:
+                                st.markdown(parsed.answer)
+                                render_retrieval_hits(gate.hits)
+                                st.session_state.chat_history.append({
+                                    "role": "assistant",
+                                    "content": parsed.answer,
+                                    "hits": gate.hits
+                                })
+
+                            elif parsed.status == "answered" and not parsed.has_citations:
+                                st.markdown(parsed.answer)
+                                st.caption("⚠️ Note: This answer could not be fully verified with citations.")
+                                render_retrieval_hits(gate.hits)
+                                st.session_state.chat_history.append({
+                                    "role": "assistant",
+                                    "content": parsed.answer,
+                                    "hits": gate.hits
+                                })
+
+                            elif parsed.status == "insufficient":
+                                st.warning("The document does not contain enough information to answer this question.")
+                                st.session_state.chat_history.append({
+                                    "role": "assistant",
+                                    "content": parsed.answer
+                                })
+
+                            elif parsed.status == "contradicted":
+                                st.warning("The premise of your question appears to contradict what the document states.")
+                                st.session_state.chat_history.append({
+                                    "role": "assistant",
+                                    "content": parsed.answer
+                                })
+
+                            elif parsed.status == "error":
+                                st.error("The model returned an unexpected response. Please try again.")
+                                st.session_state.chat_history.append({
+                                    "role": "assistant",
+                                    "content": parsed.answer
+                                })
+
+                            add_trace("LLM response generated successfully")
+                        except Exception as e:
+                            add_trace(f"LLM call failed: {str(e)}", level="ERROR")
+                            st.error(f"Answer generation failed: {e}")
                 else:
                     st.warning(gate.message)
                     st.session_state.chat_history.append({

@@ -14,89 +14,111 @@ from logs.schema import ParsedPage, ParsedDocument
 
 log = get_logger("ingestion.parser")
 
-def parse_pdf(pdf_path: str) -> ParsedDocument:
-    """
-    Parses a PDF file into a ParsedDocument object using PyMuPDF (fitz).
-    """
-    if not os.path.exists(pdf_path):
-        log.error("pdf_not_found", path=pdf_path)
-        raise ValueError(f"PDF file not found: {pdf_path}")
-
+def _parse_with_pymupdf(pdf_path: str) -> List[ParsedPage]:
+    """Extracts text using PyMuPDF."""
     try:
         doc = fitz.open(pdf_path)
     except Exception as e:
-        log.error("fitz_open_failed", path=pdf_path, error=str(e))
-        raise ValueError(f"Failed to open PDF with fitz: {e}")
-
-    page_count = len(doc)
-    if page_count == 0:
-        log.error("empty_pdf", path=pdf_path)
-        doc.close()
-        raise ValueError("PDF has 0 pages")
-
-    log.info("parse_start", path=pdf_path, page_count=page_count)
+        log.error("pymupdf_open_failed", path=pdf_path, error=str(e))
+        return []
 
     parsed_pages = []
-    total_blocks_count = 0
-
     for i, page in enumerate(doc):
-        page_no = i + 1
-        
-        # Extract blocks: (x0, y0, x1, y1, text, block_no, block_type)
-        # block_type: 0 = text, 1 = image
         raw_blocks = page.get_text("blocks")
-        
         page_blocks = []
         block_texts = []
         
         for b in raw_blocks:
             x0, y0, x1, y1, text, block_no, block_type = b
-            
             if not text.strip():
                 continue
                 
-            block_dict = {
+            page_blocks.append({
                 "block_no": int(block_no),
                 "text": text,
                 "bbox": [x0, y0, x1, y1],
                 "type": "text" if block_type == 0 else "image",
                 "line_count": len(text.strip().split("\n"))
-            }
-            
-            page_blocks.append(block_dict)
+            })
             block_texts.append(text)
         
-        raw_text = "\n".join(block_texts)
-        
-        parsed_page = ParsedPage(
-            page_no=page_no,
-            raw_text=raw_text,
+        parsed_pages.append(ParsedPage(
+            page_number=i + 1,
+            text="\n".join(block_texts),
             blocks=page_blocks
-        )
-        
-        parsed_pages.append(parsed_page)
-        total_blocks_count += len(page_blocks)
-        
-        log.info(
-            "page_parsed", 
-            page_no=page_no, 
-            block_count=len(page_blocks), 
-            char_count=len(raw_text)
-        )
-
+        ))
     doc.close()
-    
+    return parsed_pages
+
+def _parse_with_pdfplumber(pdf_path: str) -> List[ParsedPage]:
+    """Fallback 1: Extract text using pdfplumber."""
+    import pdfplumber
+    parsed_pages = []
+    try:
+        with pdfplumber.open(pdf_path) as pdf:
+            for i, page in enumerate(pdf.pages):
+                text = page.extract_text() or ""
+                parsed_pages.append(ParsedPage(
+                    page_number=i + 1,
+                    text=text,
+                    blocks=[{"text": text}] if text else []
+                ))
+    except Exception as e:
+        log.error("pdfplumber_failed", error=str(e))
+    return parsed_pages
+
+def _parse_with_ocr(pdf_path: str) -> List[ParsedPage]:
+    """Fallback 2: Extract text using OCR (Tesseract)."""
+    import pytesseract
+    from pdf2image import convert_from_path
+    parsed_pages = []
+    try:
+        images = convert_from_path(pdf_path)
+        for i, image in enumerate(images):
+            text = pytesseract.image_to_string(image)
+            parsed_pages.append(ParsedPage(
+                page_number=i + 1,
+                text=text,
+                blocks=[{"text": text}] if text else []
+            ))
+    except Exception as e:
+        log.error("ocr_failed", error=str(e))
+    return parsed_pages
+
+def parse_pdf(pdf_path: str) -> ParsedDocument:
+    """
+    Parses a PDF file into a ParsedDocument object using a tiered fallback strategy.
+    """
+    if not os.path.exists(pdf_path):
+        log.error("pdf_not_found", path=pdf_path)
+        raise ValueError(f"PDF file not found: {pdf_path}")
+
+    log.info("parse_start", path=pdf_path)
+
+    # Tier 1: PyMuPDF
+    result_pages = _parse_with_pymupdf(pdf_path)
+    avg_chars = sum(len(p.text) for p in result_pages) / max(len(result_pages), 1)
+
+    # Tier 2 Fallback: pdfplumber
+    if avg_chars < 150:
+        log.warning("parser_fallback_pdfplumber", avg_chars=avg_chars)
+        result_pages = _parse_with_pdfplumber(pdf_path)
+        avg_chars = sum(len(p.text) for p in result_pages) / max(len(result_pages), 1)
+
+    # Tier 3 Fallback: OCR
+    if avg_chars < 150:
+        log.warning("parser_fallback_ocr", avg_chars=avg_chars)
+        result_pages = _parse_with_ocr(pdf_path)
+
+    if not result_pages:
+        raise ValueError(f"Failed to extract any text from PDF: {pdf_path}")
+
     parsed_doc = ParsedDocument(
         source_path=pdf_path,
         filename=os.path.basename(pdf_path),
-        total_pages=page_count,
-        pages=parsed_pages
+        total_pages=len(result_pages),
+        pages=result_pages
     )
 
-    log.info(
-        "parse_complete", 
-        total_pages=page_count, 
-        total_blocks=total_blocks_count
-    )
-    
+    log.info("parse_complete", total_pages=len(result_pages))
     return parsed_doc

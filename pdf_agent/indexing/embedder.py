@@ -13,19 +13,18 @@ from logs.logger import get_logger
 
 log = get_logger("indexing.embedder")
 
-_model = None
+import streamlit as st
 
+@st.cache_resource
 def get_model(model_name: str = EMBEDDING_MODEL) -> SentenceTransformer:
-    global _model
-    if _model is None:
-        try:
-            log.info("embedding_model_load_start", model_name=model_name)
-            _model = SentenceTransformer(model_name)
-            log.info("embedding_model_load_complete", model_name=model_name)
-        except Exception as e:
-            log.error("embedding_failure", error=str(e), stage="model_load")
-            raise RuntimeError(f"Failed to load embedding model: {e}")
-    return _model
+    try:
+        log.info("embedding_model_load_start", model_name=model_name)
+        model = SentenceTransformer(model_name)
+        log.info("embedding_model_load_complete", model_name=model_name)
+        return model
+    except Exception as e:
+        log.error("embedding_failure", error=str(e), stage="model_load")
+        raise RuntimeError(f"Failed to load embedding model: {e}")
 
 class Embedder:
     """
