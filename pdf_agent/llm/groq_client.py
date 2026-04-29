@@ -10,7 +10,7 @@ load_dotenv()
 log = get_logger("llm.groq_client")
 
 @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=8))
-def call_llm(system_prompt: str, messages: List[Dict]) -> str:
+def call_llm(system_prompt: str, messages: List[Dict], max_tokens: int = LLM_MAX_TOKENS, temperature: float = 0.0) -> str:
     """
     Sends messages to Groq and returns raw text response.
     Retries up to 3 times with exponential backoff on failure.
@@ -32,8 +32,8 @@ def call_llm(system_prompt: str, messages: List[Dict]) -> str:
         response = client.chat.completions.create(
             model=LLM_MODEL,
             messages=full_messages,
-            temperature=0,
-            max_tokens=LLM_MAX_TOKENS
+            temperature=temperature,
+            max_tokens=max_tokens
         )
         
         raw_text = response.choices[0].message.content

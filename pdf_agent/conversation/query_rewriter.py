@@ -1,130 +1,127 @@
-"""
-conversation/query_rewriter.py
-Responsibility: Rewrites vague or pronoun-heavy follow-up queries into
-self-contained queries using conversation history and a Groq LLM call.
-Only activates when the query is short AND contains reference triggers.
-Does not run on every turn — only when needed.
-"""
-
-import os
-from dotenv import load_dotenv
-from groq import Groq
-from typing import List, Dict, Optional
-from config import LLM_MODEL
+from conversation.history import get_recent_history, format_history_for_rewriter, is_followup
+from llm.groq_client import call_llm
+from config import MAX_CHAT_HISTORY
 from logs.logger import get_logger
 
-load_dotenv()
 log = get_logger("conversation.query_rewriter")
 
-REFERENCE_TRIGGERS = [
-    "that", "it", "this", "there", "they", "those",
-    "the announcement", "the decision", "the measure",
-    "the policy", "the rate", "the report", "the section",
-    "what about", "elaborate", "explain more", "tell me more",
-    "why", "how so", "and then", "what happened", "what was"
-]
-
-REWRITER_SYSTEM_PROMPT = """You are a query rewriting assistant for a document Q&A system.
-
-Your job: Given a conversation history and a vague follow-up question, rewrite the question into a fully self-contained search query that can be understood without any prior context.
+REWRITER_SYSTEM_PROMPT = """
+You are a query rewriting assistant for a document Q&A system.
+You will be given a conversation history and a follow-up question.
+Your job is to rewrite the follow-up into a fully self-contained search query
+that can be understood without the conversation history.
 
 Rules:
-1. Output ONLY the rewritten query. No explanation. No preamble.
-2. Preserve the original intent exactly.
-3. Replace all pronouns and vague references with specific terms from the conversation.
-4. Keep the rewritten query concise — one sentence maximum.
-5. If the query is already self-contained, return it unchanged.
+- Resolve all pronouns and references using the history.
+- Keep the rewritten query concise — one sentence, under 30 words.
+- Do not answer the question. Only rewrite it.
+- If the follow-up is already self-contained, return it unchanged.
+- If the reference is completely ambiguous and cannot be resolved even
+  with the history, return exactly this string and nothing else:
+  CLARIFICATION_NEEDED
+- Never add explanation, preamble, or apology. Return only the rewritten
+  query or CLARIFICATION_NEEDED.
 """
 
-def needs_rewriting(query: str) -> bool:
+def rewrite_query(
+    user_query: str,
+    chat_history: list,
+    max_turns: int = MAX_CHAT_HISTORY
+) -> dict:
     """
-    Returns True if the query is short and contains reference triggers
-    that suggest it depends on prior context.
-    """
-    query_lower = query.lower().strip()
-    word_count = len(query_lower.split())
-    
-    if word_count > 12:
-        return False
-    
-    return any(trigger in query_lower for trigger in REFERENCE_TRIGGERS)
+    Rewrites a follow-up query into a self-contained query.
 
-def build_history_summary(chat_history: List[Dict], max_turns: int = 3) -> str:
-    """
-    Extracts the last N assistant+user turns from chat history
-    and formats them as a readable conversation summary.
-    """
-    relevant = []
-    turns_collected = 0
-    
-    for msg in reversed(chat_history):
-        if turns_collected >= max_turns:
-            break
-        if msg["role"] in ("user", "assistant") and msg.get("content", "").strip():
-            relevant.append(f"{msg['role'].upper()}: {msg['content'][:300]}")
-            if msg["role"] == "user":
-                turns_collected += 1
-    
-    if not relevant:
-        return ""
-    
-    return "\n".join(reversed(relevant))
+    Returns a dict with exactly these keys:
+        rewritten_query: str   — the rewritten query to use for retrieval
+        was_rewritten: bool    — True if rewriting changed the query
+        needs_clarification: bool — True if CLARIFICATION_NEEDED was returned
+        original_query: str    — the original user input unchanged
 
-def rewrite_query(query: str, chat_history: List[Dict]) -> str:
+    Logic:
+    1. Call is_followup(user_query, chat_history).
+    2. Call get_recent_history(chat_history, max_turns) to get context.
+    3. Call format_history_for_rewriter(recent_history) to get history block.
+    4. Build user message for LLM.
+    5. Call call_llm.
+    6. Strip response and check for CLARIFICATION_NEEDED.
+    7. Fallback for empty/error.
+    8. Return result.
     """
-    Main entry point. Rewrites the query if needed using Groq.
-    Returns original query unchanged if rewriting is not needed
-    or if the LLM call fails.
+    # 1. Logic
+    if not is_followup(user_query, chat_history):
+        return {
+            "rewritten_query": user_query,
+            "was_rewritten": False,
+            "needs_clarification": False,
+            "original_query": user_query
+        }
     
-    Args:
-        query: The raw user query from the current turn.
-        chat_history: Full session chat history list.
+    # 2. Logic
+    recent_history = get_recent_history(chat_history, max_turns)
+    if not recent_history:
+        return {
+            "rewritten_query": user_query,
+            "was_rewritten": False,
+            "needs_clarification": False,
+            "original_query": user_query
+        }
         
-    Returns:
-        Rewritten self-contained query string.
-    """
-    if not needs_rewriting(query):
-        log.info("query_rewrite_skipped", reason="not_needed", query=query)
-        return query
+    # 3. Logic
+    history_block = format_history_for_rewriter(recent_history)
     
-    history_summary = build_history_summary(chat_history)
-    
-    if not history_summary:
-        log.info("query_rewrite_skipped", reason="no_history", query=query)
-        return query
-    
+    # 4. Logic
+    user_message = f"""Conversation so far:
+{history_block}
+
+Follow-up question: {user_query}
+
+Rewrite the follow-up into a self-contained search query."""
+
+    # 5. Logic
     try:
-        log.info("query_rewrite_start", query=query)
-        
-        api_key = os.environ.get("GROQ_API_KEY")
-        if not api_key:
-            raise RuntimeError("GROQ_API_KEY not found")
-        
-        import httpx
-        client = Groq(api_key=api_key, http_client=httpx.Client())
-        
-        user_message = f"""Conversation so far:
-{history_summary}
-
-Follow-up question to rewrite:
-{query}
-
-Rewrite this follow-up into a fully self-contained search query:"""
-
-        response = client.chat.completions.create(
-            model=LLM_MODEL,
-            messages=[
-                {"role": "system", "content": REWRITER_SYSTEM_PROMPT},
-                {"role": "user", "content": user_message}
-            ],
-            temperature=0,
-            max_tokens=120
+        # Call call_llm as per instructions. 
+        # Note: We pass max_tokens and temperature as requested, 
+        # assuming call_llm will be updated or already matches.
+        response = call_llm(
+            system_prompt=REWRITER_SYSTEM_PROMPT,
+            messages=[{"role": "user", "content": user_message}],
+            max_tokens=80,
+            temperature=0.0
         )
         
-        rewritten = response.choices[0].message.content.strip()
-        log.info("query_rewrite_complete", original=query, rewritten=rewritten)
-        return rewritten
-        
+        # 6. Logic
+        rewritten = response.strip() if response else ""
+        if rewritten == "CLARIFICATION_NEEDED":
+            return {
+                "rewritten_query": user_query,
+                "was_rewritten": False,
+                "needs_clarification": True,
+                "original_query": user_query
+            }
+            
+        # 7. Logic
+        if not rewritten:
+            log.warning("query_rewriter_empty_response", query=user_query)
+            return {
+                "rewritten_query": user_query,
+                "was_rewritten": False,
+                "needs_clarification": False,
+                "original_query": user_query
+            }
+            
+        # 8. Logic
+        return {
+            "rewritten_query": rewritten,
+            "was_rewritten": True,
+            "needs_clarification": False,
+            "original_query": user_query
+        }
+
     except Exception as e:
-        log.warning("query_rewrite_failed", error=str(e), query=query)
-        return query
+        log.warning("query_rewriter_failed", error=str(e), query=user_query)
+        return {
+            "rewritten_query": user_query,
+            "was_rewritten": False,
+            "needs_clarification": False,
+            "original_query": user_query
+        }

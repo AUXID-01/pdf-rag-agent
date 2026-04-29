@@ -11,6 +11,65 @@ from typing import List, Optional
 from logs.logger import get_logger
 from logs.schema import ParsedPage, ParsedDocument
 
+def infer_section_from_text(text: str) -> str:
+    """
+    Extracts a keyword-based fallback from chunk/page text when the section is invalid.
+    """
+    if not text:
+        return "General"
+        
+    val = text.lower()
+    if "inflation" in val:
+        return "Inflation"
+    if "growth" in val:
+        return "Growth"
+    if "liquidity" in val:
+        return "Liquidity"
+    if "policy" in val:
+        return "Monetary Policy"
+    
+    return "General"
+
+def clean_section_title(section: Optional[str], text: Optional[str] = None) -> str:
+    """
+    Sanitizes section titles to ensure they are high-quality and human-readable.
+    Uses keyword inference as fallback if primary section is invalid.
+    """
+    fallback = infer_section_from_text(text) if text else "General"
+    
+    if not section or not section.strip():
+        return fallback
+    
+    val = section.strip()
+    words = val.split()
+    
+    # Check invalid conditions
+    is_invalid = False
+    
+    # Rule 2: Word count > 10
+    if len(words) > 10:
+        is_invalid = True
+        
+    # Rule 3: Starts with FY\d+ or digits
+    elif re.match(r"^(FY\d+|\d+)", val):
+        is_invalid = True
+        
+    # Rule 4: Contains comma or ends with period
+    elif "," in val or val.endswith("."):
+        is_invalid = True
+        
+    # Rule 5: Capitalization ratio < 0.4
+    else:
+        alpha_chars = [c for c in val if c.isalpha()]
+        if alpha_chars:
+            upper_ratio = sum(1 for c in alpha_chars if c.isupper()) / len(alpha_chars)
+            if upper_ratio < 0.4:
+                is_invalid = True
+        elif not any(c.isdigit() for c in val):
+            is_invalid = True
+
+    return fallback if is_invalid else val
+
 # Add this at the top of the file, after the imports
 KNOWN_SECTION_PATTERNS = [
     "RBI continues with hawkish policy stance",
@@ -163,7 +222,10 @@ def enrich_metadata(doc: ParsedDocument) -> ParsedDocument:
     for page in doc.pages:
         # Statefully track section content
         current_section = detect_section(page, current_section)
-        page.section_title = current_section
+        # Passing page text to allow keyword inference if section is messy
+        page.section_title = clean_section_title(current_section, page.text)
+        # Update current_section for the next page to use the sanitized version
+        current_section = page.section_title
         
     log.info("enrichment_complete", filename=doc.filename)
     return doc

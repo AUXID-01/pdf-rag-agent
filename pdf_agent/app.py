@@ -5,7 +5,7 @@ from datetime import datetime
 from config import ensure_project_dirs, UPLOAD_DIR, CITATION_FORMAT, SESSION_KEYS
 from ingestion.parser import parse_pdf
 from ingestion.cleaner import clean_pages
-from ingestion.metadata import enrich_metadata
+from ingestion.metadata import enrich_metadata, clean_section_title
 from ingestion.chunker import chunk_pages
 from indexing.index_builder import build_index
 from retrieval.searcher import search_query
@@ -16,7 +16,12 @@ from llm.groq_client import call_llm
 from llm.response_parser import parse_llm_response
 from llm.gate2_checker import validate_citations_against_chunks
 from ui.citation_card import render_citation_chips, render_refusal_chip
+from conversation.history import is_followup
 from conversation.query_rewriter import rewrite_query
+from retrieval.citations import build_clean_citations
+from logs.logger import get_logger
+
+log = get_logger("app")
 
 
 # 1. Page Configuration
@@ -113,7 +118,7 @@ with st.sidebar:
         st.markdown("---")
         st.subheader("🎯 Latest Retrieval Hits")
         for i, hit in enumerate(st.session_state.last_retrievals):
-            section = hit['section']
+            section = clean_section_title(hit['section'], hit.get('text', ''))
             # Truncate section title for sidebar
             short_section = (section[:15] + '..') if len(section) > 15 else section
             st.caption(f"**#{i+1}** | P{hit['page']} | {short_section} | Dist: {hit['distance']:.2f}")
@@ -134,7 +139,7 @@ def render_retrieval_hits(hits, msg_idx=0):
     """Utility to render hits consistently in history and current turn."""
     with st.expander("Retrieved Context Chunks", expanded=False):
         for i, hit in enumerate(hits):
-            section = hit['section']
+            section = clean_section_title(hit['section'], hit.get('text', ''))
             # Requirement 3 & 4: Rendering logic
             if section == "General":
                  section_html = f"*{section}*"  # Less emphasis
@@ -160,8 +165,31 @@ for msg_idx, message in enumerate(st.session_state.chat_history):
 
 # Chat Input
 if prompt := st.chat_input("Ask a question about the document"):
-    # Append user message
+    # CHANGE 2 & 4: Capturing prompt and appending to history
     st.session_state.chat_history.append({"role": "user", "content": prompt})
+    
+    rewrite_result = rewrite_query(prompt, st.session_state.chat_history)
+
+    if rewrite_result["needs_clarification"]:
+        with st.chat_message("assistant"):
+            st.warning(
+                "Your question references something unclear from the "
+                "conversation. Could you clarify what you are referring to?"
+            )
+        st.session_state.chat_history.append({
+            "role": "assistant",
+            "content": "Clarification requested — query too ambiguous to resolve.",
+            "citations": []
+        })
+        st.stop()
+
+    retrieval_query = rewrite_result["rewritten_query"]
+
+    if rewrite_result["was_rewritten"]:
+        log.info("query_rewritten",
+                 original=prompt,
+                 rewritten=retrieval_query)
+
     with st.chat_message("user"):
         st.markdown(prompt)
     
@@ -175,34 +203,26 @@ if prompt := st.chat_input("Ask a question about the document"):
             st.session_state.chat_history.append({"role": "assistant", "content": response})
         else:
             with st.spinner("Retrieving relevant context..."):
-                # Call Phase 6 Retrieval
-                retrieval_query = rewrite_query(
-                    query=prompt,
-                    chat_history=st.session_state.chat_history
-                )
-
-                if retrieval_query != prompt:
-                    add_trace(f"Query rewritten: '{prompt}' → '{retrieval_query}'")
-
                 hits = search_query(
                     query=retrieval_query,
                     doc_id=st.session_state.uploaded_doc,
                     top_k=20
                 )
-                hits = rerank(query=prompt, hits=hits)
+                # CHANGE 3: Use retrieval_query for rerank
+                hits = rerank(query=retrieval_query, hits=hits)
                 if hits:
                     add_trace(f"Reranked to {len(hits)} chunks | top score: {hits[0]['rerank_score']:.3f}")
                 else:
                     add_trace("Rerank returned empty", level="WARNING")
 
-                gate: GateResult = evaluate(hits=hits, query=prompt)
+                gate: GateResult = evaluate(hits=hits, query=retrieval_query)
                 st.session_state.last_retrievals = gate.hits
                 add_trace(f"Gate decision: {gate.reason} | best_sim={gate.best_similarity:.3f}")
 
                 if gate.passed:
                     with st.spinner("Generating grounded answer..."):
                         try:
-                            messages = build_messages(query=prompt, hits=gate.hits)
+                            messages = build_messages(query=retrieval_query, hits=gate.hits)
                             raw_answer = call_llm(system_prompt=SYSTEM_PROMPT, messages=messages)
                             parsed = parse_llm_response(raw_answer)
                             gate2_result = validate_citations_against_chunks(parsed, gate.hits)
@@ -214,18 +234,29 @@ if prompt := st.chat_input("Ask a question about the document"):
                                 )
                                 render_refusal_chip()
                             else:
-                                st.markdown(parsed.answer_text)
-                                render_citation_chips(parsed.citations)
+                                clean_citations = build_clean_citations(gate.hits)
+                                
+                                # ENFORCE SOURCES BLOCK FORMAT (No inline)
+                                source_block = ""
+                                if clean_citations:
+                                    source_block = "\n\n**Sources:**\n" + "\n".join([f"[Page {c[0]} | {c[1]}]" for c in clean_citations])
+                                
+                                full_answer = parsed.answer_text + source_block
+                                st.markdown(full_answer)
+                                
+                                # DISABLED: Sources block and Chips (as per Step 5)
+                                # render_citation_chips(clean_citations) 
+                                
                                 render_retrieval_hits(gate.hits)
 
                             # Append to session history only if gate2 passed
                             if gate2_result["passed"]:
                                 st.session_state.chat_history.append({
                                     "role": "assistant",
-                                    "content": parsed.answer_text,
+                                    "content": full_answer,
                                     "citations": [
-                                        {"page": c.page, "section": c.section}
-                                        for c in parsed.citations
+                                        {"page": c[0], "section": c[1]}
+                                        for c in clean_citations
                                     ],
                                     "hits": gate.hits
                                 })
