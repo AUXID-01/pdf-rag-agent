@@ -1,31 +1,39 @@
-"""
-logs/trace.py
-Responsibility: Collect per-turn trace events and expose them for the Streamlit sidebar.
-Inputs: trace events (query, retrievals, gate decision, citations)
-Outputs: List[dict] — trace log for current turn
-Dependencies: logs/schema.py
-"""
+from typing import List, Dict, Any, Optional
 
-from datetime import datetime
-from typing import List
+def build_trace(
+    query: str,
+    rewrite_result: Dict[str, Any],
+    hits: List[Dict],
+    gate_result: Any,
+    response_type: str,
+    citations: List[Any]
+) -> Dict[str, Any]:
+    """
+    Constructs a structured trace object for evaluation-grade traceability.
+    """
+    # retrieval_hits: top 3 hits
+    retrieval_hits = []
+    for hit in hits[:3]:
+        retrieval_hits.append({
+            "page": hit.get("page", 0),
+            "section": hit.get("section", "General"),
+            "score": hit.get("rerank_score", 1.0 - hit.get("distance", 1.0)),
+            "text_preview": hit.get("preview", "")
+        })
 
-def init_trace(session_state) -> None:
-    """Sets session_state['trace_log'] = [] if not already present."""
-    if "trace_log" not in session_state:
-        session_state["trace_log"] = []
+    # top_score: hits[0].rerank_score
+    top_score = hits[0].get("rerank_score", 0.0) if hits else 0.0
 
-def add_trace_event(session_state, event_type: str, payload: dict) -> None:
-    """Appends a dict to session_state['trace_log']."""
-    if "trace_log" not in session_state:
-        init_trace(session_state)
-    
-    event = {
-        "event_type": event_type,
-        "payload": payload,
-        "timestamp": datetime.now().isoformat()
+    trace = {
+        "query": query,
+        "rewritten_query": rewrite_result.get("rewritten_query", query),
+        "is_followup": rewrite_result.get("was_rewritten", False),
+        "retrieval_hits": retrieval_hits,
+        "top_score": top_score,
+        "gate_decision": "PASS" if gate_result.passed else "FAIL",
+        "gate_reason": gate_result.reason,
+        "response_type": response_type,
+        "citations": citations
     }
-    session_state["trace_log"].append(event)
-
-def get_trace(session_state) -> List[dict]:
-    """Returns session_state['trace_log'] or empty list."""
-    return session_state.get("trace_log", [])
+    
+    return trace

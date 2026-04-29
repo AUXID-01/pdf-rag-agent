@@ -19,6 +19,7 @@ from ui.citation_card import render_citation_chips, render_refusal_chip
 from conversation.history import is_followup
 from conversation.query_rewriter import rewrite_query
 from retrieval.citations import build_clean_citations
+from logs.trace import build_trace
 from logs.logger import get_logger
 
 log = get_logger("app")
@@ -36,13 +37,16 @@ for key, default_value in SESSION_KEYS.items():
     if key not in st.session_state:
         st.session_state[key] = default_value
 
-def add_trace(message: str, level: str = "INFO"):
-    timestamp = datetime.now().strftime("%H:%M:%S")
-    st.session_state.trace_log.append(f"[{timestamp}] {level}: {message}")
-    if len(st.session_state.trace_log) > 20:
+def add_trace_event(trace: dict):
+    """
+    Stores a structured trace in session state, limited to last 10 entries.
+    """
+    st.session_state.trace_log.append(trace)
+    if len(st.session_state.trace_log) > 10:
         st.session_state.trace_log.pop(0)
 
-# 3. Sidebar: Configuration & Status
+    # 3. Sidebar: Configuration & Status
+    # 3. Sidebar: Configuration & Status
 with st.sidebar:
     st.title("🎛️ Control Panel")
     
@@ -61,7 +65,6 @@ with st.sidebar:
             st.session_state.chunk_count = 0
             st.session_state.last_index_summary = None
             st.session_state.last_retrievals = []
-            add_trace(f"Uploaded {uploaded_file.name}")
             st.success(f"File uploaded: {uploaded_file.name}")
 
     st.markdown("---")
@@ -71,32 +74,17 @@ with st.sidebar:
     if st.button("🚀 Ingest & Index", disabled=not can_ingest):
         with st.spinner("Processing PDF Pipeline..."):
             try:
-                add_trace("Starting ingestion pipeline...")
                 file_path = os.path.join(UPLOAD_DIR, st.session_state.uploaded_doc)
-                
-                # Run Pipeline
                 parsed = parse_pdf(file_path)
-                add_trace(f"Parsed {parsed.total_pages} pages")
-                
                 cleaned = clean_pages(parsed)
-                add_trace("Text cleaning complete")
-                
                 enriched = enrich_metadata(cleaned)
-                add_trace("Metadata enrichment complete")
-                
                 chunks = chunk_pages(enriched)
-                add_trace(f"Created {len(chunks)} chunks")
-                
                 summary = build_index(chunks, source_doc=st.session_state.uploaded_doc)
-                add_trace("Vector indexing complete")
-                
-                # Update State
                 st.session_state.indexed = True
                 st.session_state.chunk_count = summary.get("indexed_chunk_count", 0)
                 st.session_state.last_index_summary = summary
                 
             except Exception as e:
-                add_trace(f"Error during ingestion: {str(e)}", level="ERROR")
                 st.error(f"Ingestion failed: {e}")
 
     st.markdown("---")
@@ -109,28 +97,38 @@ with st.sidebar:
         st.warning("Ready to index")
     else:
         st.success(f"✅ Indexed {st.session_state.chunk_count} chunks from {st.session_state.uploaded_doc}")
-        if st.session_state.last_index_summary:
-            with st.expander("Index Summary"):
-                st.json(st.session_state.last_index_summary)
 
-    # Retrieval Execution Trace (Requirement 8: Compact Sidebar)
-    if st.session_state.last_retrievals:
-        st.markdown("---")
-        st.subheader("🎯 Latest Retrieval Hits")
-        for i, hit in enumerate(st.session_state.last_retrievals):
-            section = clean_section_title(hit['section'], hit.get('text', ''))
-            # Truncate section title for sidebar
-            short_section = (section[:15] + '..') if len(section) > 15 else section
-            st.caption(f"**#{i+1}** | P{hit['page']} | {short_section} | Dist: {hit['distance']:.2f}")
-
+    # PHASE 11: Trace Panel UI
     st.markdown("---")
+    st.header("🔍 Trace Panel")
     
-    # Sidebar Trace
-    st.subheader("Execution Trace")
-    trace_container = st.container(height=250)
-    with trace_container:
-        for event in reversed(st.session_state.trace_log):
-            st.caption(event)
+    if not st.session_state.trace_log:
+        st.caption("No queries traced yet.")
+    else:
+        # Show traces in reverse order (newest first)
+        for i, t in enumerate(reversed(st.session_state.trace_log)):
+            with st.expander(f"Trace: {t['query'][:30]}...", expanded=(i==0)):
+                st.markdown(f"**Query:** {t['query']}")
+                st.markdown(f"**Rewritten:** {t['rewritten_query']}")
+                st.markdown(f"**Follow-up:** {'Yes' if t['is_followup'] else 'No'}")
+                
+                st.markdown("---")
+                st.markdown("**Top Hits:**")
+                for hit in t['retrieval_hits']:
+                    st.caption(f"- Page {hit['page']} | {hit['section']} | Score: {hit['score']:.3f}")
+                
+                st.markdown("---")
+                st.markdown(f"**Gate:**")
+                color = "green" if t['gate_decision'] == "PASS" else "red"
+                st.markdown(f":{color}[{t['gate_decision']}] ({t['gate_reason']})")
+                
+                st.markdown("---")
+                st.markdown(f"**Output:**")
+                st.markdown(f"Type: {t['response_type']}")
+                if t['citations']:
+                    st.markdown("Citations:")
+                    for c in t['citations']:
+                        st.caption(f"- [Page {c[0]} | {c[1]}]")
 
 # 4. Main Panel: Chat Interface
 st.title("📄 PDF-Grounded Conversational Agent")
@@ -192,8 +190,6 @@ if prompt := st.chat_input("Ask a question about the document"):
 
     with st.chat_message("user"):
         st.markdown(prompt)
-    
-    add_trace(f"User query: {prompt}")
 
     # Assistant Logic
     with st.chat_message("assistant"):
@@ -208,16 +204,14 @@ if prompt := st.chat_input("Ask a question about the document"):
                     doc_id=st.session_state.uploaded_doc,
                     top_k=20
                 )
-                # CHANGE 3: Use retrieval_query for rerank
                 hits = rerank(query=retrieval_query, hits=hits)
-                if hits:
-                    add_trace(f"Reranked to {len(hits)} chunks | top score: {hits[0]['rerank_score']:.3f}")
-                else:
-                    add_trace("Rerank returned empty", level="WARNING")
 
                 gate: GateResult = evaluate(hits=hits, query=retrieval_query)
                 st.session_state.last_retrievals = gate.hits
-                add_trace(f"Gate decision: {gate.reason} | best_sim={gate.best_similarity:.3f}")
+
+                clean_citations = []
+                full_answer = ""
+                response_type = "refusal"
 
                 if gate.passed:
                     with st.spinner("Generating grounded answer..."):
@@ -233,9 +227,9 @@ if prompt := st.chat_input("Ask a question about the document"):
                                     f"Reason: {gate2_result['reason']}"
                                 )
                                 render_refusal_chip()
+                                full_answer = "[Response blocked — citation validation failed]"
                             else:
                                 clean_citations = build_clean_citations(gate.hits)
-                                
                                 # ENFORCE SOURCES BLOCK FORMAT (No inline)
                                 source_block = ""
                                 if clean_citations:
@@ -243,10 +237,7 @@ if prompt := st.chat_input("Ask a question about the document"):
                                 
                                 full_answer = parsed.answer_text + source_block
                                 st.markdown(full_answer)
-                                
-                                # DISABLED: Sources block and Chips (as per Step 5)
-                                # render_citation_chips(clean_citations) 
-                                
+                                response_type = "answer"
                                 render_retrieval_hits(gate.hits)
 
                             # Append to session history only if gate2 passed
@@ -263,21 +254,31 @@ if prompt := st.chat_input("Ask a question about the document"):
                             else:
                                 st.session_state.chat_history.append({
                                     "role": "assistant",
-                                    "content": "[Response blocked — citation validation failed]",
+                                    "content": full_answer,
                                     "citations": []
                                 })
 
-                            add_trace("LLM response generated successfully")
                         except Exception as e:
-                            add_trace(f"LLM call failed: {str(e)}", level="ERROR")
                             st.error(f"Answer generation failed: {e}")
+                            full_answer = f"Error: {e}"
                 else:
                     st.warning(gate.message)
+                    full_answer = gate.message
                     st.session_state.chat_history.append({
                         "role": "assistant",
-                        "content": gate.message,
+                        "content": full_answer,
                     })
-                    add_trace(f"Gate refused — {gate.reason}", level="WARNING")
+                
+                # PHASE 11: Capture turn-level trace
+                turn_trace = build_trace(
+                    query=prompt,
+                    rewrite_result=rewrite_result,
+                    hits=hits,
+                    gate_result=gate,
+                    response_type=response_type,
+                    citations=clean_citations
+                )
+                add_trace_event(turn_trace)
 
 # 5. Footer / Info
 if not st.session_state.chat_history:

@@ -2,6 +2,7 @@ from dataclasses import dataclass
 from typing import List, Dict, Optional
 from logs.logger import get_logger
 from config import SIMILARITY_THRESHOLD, SCATTER_THRESHOLD, RERANKER_THRESHOLD
+from ingestion.metadata import clean_section_title
 
 log = get_logger("retrieval.hallucination_gate")
 
@@ -14,19 +15,60 @@ class GateResult:
     best_similarity: float         # 0.0 if no hits
     nearest_topic: Optional[str]   # Section title of best hit even on refusal, None if no hits
 
-REFUSAL_TEMPLATE = (
-    "Your question asks about: '{query_topic}'.\n\n"
-    "I searched the uploaded document across all sections and found no sufficiently relevant content.\n"
-    "{nearest_hint}"
-    "Please ask about topics explicitly covered in the document."
-)
+def build_refusal_response(query: str, hits: List[Dict], gate_reason: str) -> str:
+    """
+    Upgraded refusal system that classifies failures into specific types:
+    - OUT_OF_SCOPE: No relevant content at all.
+    - FALSE_ASSUMPTION: Query contains "how/why/when did" but doc doesn't support it.
+    - PARTIAL_MATCH: Related content found but not specific enough.
+    """
+    query_lower = query.lower()
+    
+    # 1. Classification Logic
+    if gate_reason == "NO_RESULTS" or (hits and hits[0].get('rerank_score', 0) < 0.15):
+        refusal_type = "OUT_OF_SCOPE"
+    elif any(kw in query_lower for kw in ["why did", "when did", "how did"]) or gate_reason == "CONTRADICTED_PREMISE":
+        refusal_type = "FALSE_ASSUMPTION"
+    else:
+        refusal_type = "PARTIAL_MATCH"
+
+    # 2. Template Generation
+    response = f"Your question asks about: '{query}'.\n\n"
+
+    if refusal_type == "OUT_OF_SCOPE":
+        response += "This topic is not covered in the uploaded document.\n\n"
+        response += "I searched across all sections but found no relevant content.\n\n"
+        response += "Please ask about topics explicitly discussed in the document."
+
+    elif refusal_type == "FALSE_ASSUMPTION":
+        response += "However, this assumes something that is not supported by the document.\n\n"
+        response += "I searched across all sections but found no evidence for this claim.\n\n"
+        if hits:
+            best_hit = hits[0]
+            page = best_hit.get("page", "?")
+            section = clean_section_title(best_hit.get("section"), best_hit.get("text", ""))
+            response += f"The closest related content appears in Page {page}, Section {section}, but it does not support this assumption.\n\n"
+        response += "Please verify the premise or ask about content directly present in the document."
+
+    else:  # PARTIAL_MATCH
+        response += "I searched the document and found related content, but it does not directly answer your question.\n\n"
+        if hits:
+            best_hit = hits[0]
+            page = best_hit.get("page", "?")
+            section = clean_section_title(best_hit.get("section"), best_hit.get("text", ""))
+            response += f"The closest related content appears in Page {page}, Section {section}.\n\n"
+        response += "Please refine your query based on the document content."
+
+    return response
+
+# Legacy template (for reference, but now handled by build_refusal_response)
+REFUSAL_TEMPLATE = ""
 
 def evaluate(hits: List[Dict], query: str) -> GateResult:
     log.info("gate_evaluation_start", query=query, hit_count=len(hits) if hits else 0)
     
     if not hits:
-        nearest_hint = ""
-        message = REFUSAL_TEMPLATE.format(query_topic=query, nearest_hint=nearest_hint)
+        message = build_refusal_response(query, [], "NO_RESULTS")
         
         result = GateResult(
             passed=False,
@@ -60,7 +102,7 @@ def evaluate(hits: List[Dict], query: str) -> GateResult:
             result = GateResult(
                 passed=False,
                 reason="LOW_CONFIDENCE",
-                message=REFUSAL_TEMPLATE.format(query_topic=query, nearest_hint=nearest_hint),
+                message=build_refusal_response(query, hits, "LOW_CONFIDENCE"),
                 hits=[],
                 best_similarity=best_similarity,
                 nearest_topic=hits[0].get("section")
@@ -73,7 +115,7 @@ def evaluate(hits: List[Dict], query: str) -> GateResult:
             result = GateResult(
                 passed=False,
                 reason="LOW_CONFIDENCE",
-                message=REFUSAL_TEMPLATE.format(query_topic=query, nearest_hint=nearest_hint),
+                message=build_refusal_response(query, hits, "LOW_CONFIDENCE"),
                 hits=[],
                 best_similarity=best_score,
                 nearest_topic=hits[0].get("section")
@@ -96,18 +138,13 @@ def evaluate(hits: List[Dict], query: str) -> GateResult:
     for trigger_phrase, contradiction_words in CONTRADICTION_SIGNALS:
         if trigger_phrase in query_lower:
             if any(word in all_text for word in contradiction_words):
-                nearest = hits[0].get("section", "Unknown Section")
-                page = hits[0].get("page", "?")
                 result = GateResult(
                     passed=False,
                     reason="CONTRADICTED_PREMISE",
-                    message=REFUSAL_TEMPLATE.format(
-                        query_topic=query[:80],
-                        nearest_hint=f"The document content in **Page {page}**, Section **{nearest}** appears to contradict the premise of your question.\n\n"
-                    ),
+                    message=build_refusal_response(query, hits, "CONTRADICTED_PREMISE"),
                     hits=[],
                     best_similarity=best_similarity,
-                    nearest_topic=nearest
+                    nearest_topic=hits[0].get("section")
                 )
                 log.info("gate_result", passed=result.passed, reason=result.reason, best_sim=result.best_similarity)
                 return result
@@ -121,18 +158,13 @@ def evaluate(hits: List[Dict], query: str) -> GateResult:
         median_score = scores[len(scores) // 2]
         
         if top_score > RERANKER_THRESHOLD and median_score < SCATTER_THRESHOLD:
-            nearest = hits[0].get("section", "Unknown")
-            page = hits[0].get("page", "?")
             result = GateResult(
                 passed=False,
                 reason="SCATTERED_RESULTS",
-                message=REFUSAL_TEMPLATE.format(
-                    query_topic=query[:80],
-                    nearest_hint=f"The closest content found was in **Page {page}**, Section **{nearest}** — but it does not directly answer your question.\n\n"
-                ),
+                message=build_refusal_response(query, hits, "SCATTERED_RESULTS"),
                 hits=[],
                 best_similarity=top_score,
-                nearest_topic=nearest
+                nearest_topic=hits[0].get("section")
             )
             log.info("gate_result", passed=result.passed, reason=result.reason, best_sim=result.best_similarity)
             return result
