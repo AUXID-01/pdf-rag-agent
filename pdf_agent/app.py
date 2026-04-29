@@ -14,6 +14,8 @@ from retrieval.reranker import rerank
 from llm.prompt_builder import build_messages, SYSTEM_PROMPT
 from llm.groq_client import call_llm
 from llm.response_parser import parse_response
+from conversation.query_rewriter import rewrite_query
+
 
 # 1. Page Configuration
 st.set_page_config(
@@ -172,10 +174,18 @@ if prompt := st.chat_input("Ask a question about the document"):
         else:
             with st.spinner("Retrieving relevant context..."):
                 # Call Phase 6 Retrieval
-                hits = search_query(
+                retrieval_query = rewrite_query(
                     query=prompt,
+                    chat_history=st.session_state.chat_history
+                )
+
+                if retrieval_query != prompt:
+                    add_trace(f"Query rewritten: '{prompt}' → '{retrieval_query}'")
+
+                hits = search_query(
+                    query=retrieval_query,
                     doc_id=st.session_state.uploaded_doc,
-                    top_k=20  # Wide net for reranker
+                    top_k=20
                 )
                 hits = rerank(query=prompt, hits=hits)
                 if hits:
@@ -193,9 +203,13 @@ if prompt := st.chat_input("Ask a question about the document"):
                             messages = build_messages(query=prompt, hits=gate.hits)
                             raw = call_llm(system_prompt=SYSTEM_PROMPT, messages=messages)
                             parsed = parse_response(raw)
-                            add_trace(f"LLM status: {parsed.status} | citations: {parsed.has_citations}")
+                            add_trace(
+                                f"LLM status: {parsed.status} | "
+                                f"citations: {parsed.has_citations} | "
+                                f"citation_count: {parsed.citation_count}"
+                            )
 
-                            if parsed.status == "answered" and parsed.has_citations:
+                            if parsed.status == "answered":
                                 st.markdown(parsed.answer)
                                 render_retrieval_hits(gate.hits)
                                 st.session_state.chat_history.append({
@@ -204,9 +218,12 @@ if prompt := st.chat_input("Ask a question about the document"):
                                     "hits": gate.hits
                                 })
 
-                            elif parsed.status == "answered" and not parsed.has_citations:
+                            elif parsed.status == "uncited":
                                 st.markdown(parsed.answer)
-                                st.caption("⚠️ Note: This answer could not be fully verified with citations.")
+                                st.caption(
+                                    "⚠️ Note: This answer was generated from the document "
+                                    "but citations could not be verified in the expected format."
+                                )
                                 render_retrieval_hits(gate.hits)
                                 st.session_state.chat_history.append({
                                     "role": "assistant",
@@ -215,21 +232,30 @@ if prompt := st.chat_input("Ask a question about the document"):
                                 })
 
                             elif parsed.status == "insufficient":
-                                st.warning("The document does not contain enough information to answer this question.")
+                                st.warning(
+                                    "The document does not contain enough information "
+                                    "to answer this question."
+                                )
                                 st.session_state.chat_history.append({
                                     "role": "assistant",
                                     "content": parsed.answer
                                 })
 
                             elif parsed.status == "contradicted":
-                                st.warning("The premise of your question appears to contradict what the document states.")
+                                st.warning(
+                                    "The premise of your question appears to contradict "
+                                    "what the document states."
+                                )
                                 st.session_state.chat_history.append({
                                     "role": "assistant",
                                     "content": parsed.answer
                                 })
 
                             elif parsed.status == "error":
-                                st.error("The model returned an unexpected response. Please try again.")
+                                st.error(
+                                    "The model returned an unexpected response. "
+                                    "Please try again."
+                                )
                                 st.session_state.chat_history.append({
                                     "role": "assistant",
                                     "content": parsed.answer

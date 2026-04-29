@@ -112,19 +112,30 @@ def evaluate(hits: List[Dict], query: str) -> GateResult:
                 log.info("gate_result", passed=result.passed, reason=result.reason, best_sim=result.best_similarity)
                 return result
         
-    worst_similarity = min(similarities)
-    if (best_similarity - worst_similarity) > SCATTER_THRESHOLD:
-        message = REFUSAL_TEMPLATE.format(query_topic=query, nearest_hint=nearest_hint)
-        result = GateResult(
-            passed=False,
-            reason="SCATTERED_RESULTS",
-            message=message,
-            hits=[],
-            best_similarity=best_similarity,
-            nearest_topic=nearest_topic
-        )
-        log.info("gate_result", passed=result.passed, reason=result.reason, best_sim=result.best_similarity)
-        return result
+    # Rule 3 — Scatter Check
+    # Only refuse if the TOP chunk is strong but MOST chunks are weak.
+    # A single strong hit is still useful. Refuse only if median is also weak.
+    if len(hits) >= 3:
+        scores = sorted([h.get("rerank_score", 0) for h in hits], reverse=True)
+        top_score = scores[0]
+        median_score = scores[len(scores) // 2]
+        
+        if top_score > RERANKER_THRESHOLD and median_score < 0.15:
+            nearest = hits[0].get("section", "Unknown")
+            page = hits[0].get("page", "?")
+            result = GateResult(
+                passed=False,
+                reason="SCATTERED_RESULTS",
+                message=REFUSAL_TEMPLATE.format(
+                    query_topic=query[:80],
+                    nearest_hint=f"The closest content found was in **Page {page}**, Section **{nearest}** — but it does not directly answer your question.\n\n"
+                ),
+                hits=[],
+                best_similarity=top_score,
+                nearest_topic=nearest
+            )
+            log.info("gate_result", passed=result.passed, reason=result.reason, best_sim=result.best_similarity)
+            return result
         
     result = GateResult(
         passed=True,
