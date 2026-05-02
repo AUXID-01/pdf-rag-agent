@@ -14,7 +14,7 @@ from retrieval.reranker import rerank
 from llm.prompt_builder import build_messages, SYSTEM_PROMPT
 from llm.groq_client import call_llm
 from llm.response_parser import parse_llm_response
-from llm.gate2_checker import validate_citations_against_chunks
+from llm.gate2_checker import validate_citations_against_chunks, post_process_answer
 from ui.citation_card import render_citation_chips, render_refusal_chip
 from conversation.history import is_followup
 from conversation.query_rewriter import rewrite_query
@@ -231,7 +231,7 @@ if prompt := st.chat_input("Ask a question about the document"):
                 full_answer = ""
                 response_type = "refusal"
 
-                if gate.passed:
+                if gate.state == "ANSWERABLE":
                     with st.spinner("Generating grounded answer..."):
                         try:
                             messages = build_messages(query=retrieval_query, hits=gate.hits)
@@ -247,16 +247,23 @@ if prompt := st.chat_input("Ask a question about the document"):
                                 render_refusal_chip()
                                 full_answer = "[Response blocked — citation validation failed]"
                             else:
-                                clean_citations = build_clean_citations(gate.hits)
+                                processed = post_process_answer(parsed)
+                                
+                                # FIX 3: Filter hits and citations
+                                used_ids = {c.chunk_id for c in processed["citations"]}
+                                used_hits = [h for h in gate.hits if h['chunk_id'] in used_ids]
+                                
+                                clean_citations = build_clean_citations(used_hits)
+                                
                                 # ENFORCE SOURCES BLOCK FORMAT (No inline)
                                 source_block = ""
                                 if clean_citations:
                                     source_block = "\n\n**Sources:**\n" + "\n".join([f"[Page {c[0]} | {c[1]}]" for c in clean_citations])
                                 
-                                full_answer = parsed.answer_text + source_block
+                                full_answer = processed["answer_text"] + source_block
                                 st.markdown(full_answer)
                                 response_type = "answer"
-                                render_retrieval_hits(gate.hits)
+                                render_retrieval_hits(used_hits)
 
                             # Append to session history only if gate2 passed
                             if gate2_result["passed"]:
@@ -267,7 +274,7 @@ if prompt := st.chat_input("Ask a question about the document"):
                                         {"page": c[0], "section": c[1]}
                                         for c in clean_citations
                                     ],
-                                    "hits": gate.hits
+                                    "hits": used_hits
                                 })
                             else:
                                 st.session_state.chat_history.append({
@@ -280,12 +287,19 @@ if prompt := st.chat_input("Ask a question about the document"):
                             st.error(f"Answer generation failed: {e}")
                             full_answer = f"Error: {e}"
                 else:
-                    st.warning(gate.message)
-                    full_answer = gate.message
+                    # FIX 4: Unified Refusal Format (JSON)
+                    refusal_data = json.loads(gate.message)
+                    st.warning(f"**{refusal_data['state']} REFUSAL**")
+                    st.markdown(refusal_data['reason'])
+                    with st.expander("🔍 Refusal Details (Structured)"):
+                        st.json(refusal_data)
+                    
+                    full_answer = refusal_data['reason']
                     st.session_state.chat_history.append({
                         "role": "assistant",
                         "content": full_answer,
                     })
+                    st.stop() # CRITICAL: Terminate pipeline to prevent partial answers
                 
                 # PHASE 11: Capture turn-level trace
                 turn_trace = build_trace(

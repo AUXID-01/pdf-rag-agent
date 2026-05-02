@@ -1,0 +1,30 @@
+{
+  "Test1": {
+    "status": "SUCCESS",
+    "gate1": {
+      "passed": true,
+      "reason": "All intents supported.",
+      "best_similarity": 0.45410776138305664
+    }
+  },
+  "Test2": {
+    "status": "REFUSED_GATE1_Numeric Mismatch",
+    "gate1": {
+      "passed": false,
+      "reason": "Numeric Mismatch",
+      "best_similarity": 0.38716182112693787
+    }
+  },
+  "Test3": {
+    "status": "SUCCESS",
+    "gate1": {
+      "passed": true,
+      "reason": "All intents supported.",
+      "best_similarity": 0.5862453579902649
+    }
+  },
+  "Test4": {
+    "passed": false,
+    "reason": "LLM attempted refusal"
+  }
+}

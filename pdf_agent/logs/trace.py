@@ -30,7 +30,7 @@ def build_trace(
         "is_followup": rewrite_result.get("was_rewritten", False),
         "retrieval_hits": retrieval_hits,
         "top_score": top_score,
-        "gate_decision": "PASS" if gate_result.passed else "FAIL",
+        "gate_decision": "PASS" if gate_result.state == "ANSWERABLE" else "FAIL",
         "gate_reason": gate_result.reason,
         "response_type": response_type,
         "citations": citations,

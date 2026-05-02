@@ -1,0 +1,61 @@
+{
+  "phase1": {
+    "query": "Why did the RBI increase the repo rate to 10%?",
+    "outcomes": [
+      "REFUSED_GATE1_Numeric Mismatch",
+      "REFUSED_GATE1_Numeric Mismatch",
+      "REFUSED_GATE1_Numeric Mismatch",
+      "REFUSED_GATE1_Numeric Mismatch",
+      "REFUSED_GATE1_Numeric Mismatch"
+    ],
+    "reproducibility": 0.0
+  },
+  "phase2": {
+    "increase repo rate to 10%": {
+      "score": 0.36861610412597656,
+      "g1_reason": "Premise Contradicts Context",
+      "final": "REFUSED_GATE1_Premise Contradicts Context"
+    },
+    "why repo rate 10%": {
+      "score": 0.38184064626693726,
+      "g1_reason": "Numeric Mismatch",
+      "final": "REFUSED_GATE1_Numeric Mismatch"
+    },
+    "reason for 10% repo rate": {
+      "score": 0.38495656847953796,
+      "g1_reason": "Numeric Mismatch",
+      "final": "REFUSED_GATE1_Numeric Mismatch"
+    },
+    "repo rate 10 percent explanation": {
+      "score": 0.35978615283966064,
+      "g1_reason": "All intents supported.",
+      "final": "SUCCESS"
+    }
+  },
+  "phase3": {
+    "what's up with the inflation target stuff": "SUCCESS",
+    "did they change the rates or keep them same": "SUCCESS",
+    "tell me about the central bank's stance": "SUCCESS"
+  },
+  "phase4": {
+    "query": "Why did the RBI increase the repo rate to 10%?",
+    "steps": {
+      "rewrite": {
+        "rewritten_query": "Why did the RBI increase the repo rate to 10%?",
+        "was_rewritten": false,
+        "needs_clarification": false,
+        "original_query": "Why did the RBI increase the repo rate to 10%?"
+      },
+      "retrieval": {
+        "top_score": 0.5306578278541565,
+        "hit_count": 5
+      },
+      "gate1": {
+        "passed": false,
+        "reason": "Numeric Mismatch",
+        "best_similarity": 0.5306578278541565
+      }
+    },
+    "final_status": "REFUSED_GATE1_Numeric Mismatch"
+  }
+}
