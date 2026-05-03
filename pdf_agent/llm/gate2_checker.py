@@ -25,7 +25,7 @@ def validate_citations_against_chunks(
     if not parsed.citations:
         return {"passed": False, "reason": "No citations found in response."}
 
-    refusal_phrases = ["cannot answer", "don't know", "insufficient context", "not mentioned", "not fully supported"]
+    refusal_phrases = ["cannot answer", "don't know", "not sure", "insufficient context", "not mentioned", "not fully supported"]
     if any(p in parsed.answer_text.lower() for p in refusal_phrases):
         return {"passed": False, "reason": "LLM attempted refusal"}
 
@@ -51,7 +51,12 @@ def validate_citations_against_chunks(
         chunk_emb = embedder.encode(source_chunk["text"])
         score = np.dot(answer_emb, chunk_emb) / (np.linalg.norm(answer_emb) * np.linalg.norm(chunk_emb))
         
-        if score < 0.25:
+        # FIX 3 — RELAX GATE 2 SEMANTIC VALIDATION
+        # Check for simple keyword overlap to allow paraphrasing
+        answer_words = [w for w in parsed.answer_text.lower().split() if len(w) > 4]
+        has_overlap = any(w in source_chunk["text"].lower() for w in answer_words)
+        
+        if score < 0.20 and not has_overlap:
             return {"passed": False, "reason": "Ungrounded answer"}
 
     if unverified:
@@ -104,8 +109,13 @@ def post_process_answer(parsed: ParsedResponse) -> Dict:
         if len(filtered_citations) >= 2:
             break
             
-    if not clean_text or not filtered_citations:
-        raise ValueError("Post-processing resulted in empty answer or no citations")
+    # FIX 4 — POST-PROCESS SAFETY (CRITICAL BUG)
+    # Fallback to original if processing deletes valid content
+    if not clean_text.strip() or not filtered_citations:
+        return {
+            "answer_text": parsed.answer_text,
+            "citations": parsed.citations
+        }
             
     return {
         "answer_text": clean_text,

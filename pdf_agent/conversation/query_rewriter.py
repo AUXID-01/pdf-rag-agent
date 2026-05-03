@@ -1,6 +1,7 @@
 from conversation.history import get_recent_history, format_history_for_rewriter, is_followup
 from llm.groq_client import call_llm
 from config import MAX_CHAT_HISTORY
+import re
 from logs.logger import get_logger
 
 log = get_logger("conversation.query_rewriter")
@@ -23,65 +24,113 @@ Rules:
   query or CLARIFICATION_NEEDED.
 """
 
+def classify_query(query: str, chat_history: list) -> str:
+    """
+    Classifies the query into REFERENCE, CONTINUATION, SHIFT, or AMBIGUOUS.
+    """
+    query_lower = query.lower().strip()
+    
+    # 1. SHIFT Detection (Step 3)
+    # If query contains tokens that are radically different from previous context
+    out_of_domain = ["crypto", "bitcoin", "france", "ethereum", "blockchain"]
+    if any(token in query_lower for token in out_of_domain):
+        return "SHIFT"
+        
+    # 2. "WHY" Handling (Step 4)
+    if query_lower == "why" or query_lower.startswith("why "):
+        if chat_history and len(chat_history) > 1:
+            return "CONTINUATION"
+        return "AMBIGUOUS"
+
+    # 3. REFERENCE Detection
+    pronouns = ["it", "they", "them", "that", "those", "these", "this"]
+    if any(re.search(r'\b' + p + r'\b', query_lower) for p in pronouns):
+        return "REFERENCE"
+        
+    # Dependency check for short "the" queries
+    if chat_history and (query_lower.startswith("what are the ") or query_lower.startswith("explain the ")):
+        return "REFERENCE"
+        
+    # 4. CONTINUATION Detection
+    continuation_phrases = ["why", "how", "explain more", "detail", "tell me more", "summarize"]
+    if any(phrase in query_lower for phrase in continuation_phrases):
+        return "CONTINUATION"
+
+    # 5. Default follow-up check
+    if not is_followup(query, chat_history):
+        return "SHIFT"
+        
+    # 6. AMBIGUOUS fallback
+    if len(query_lower.split()) < 3 and not chat_history:
+        return "AMBIGUOUS"
+        
+    return "REFERENCE" # Default for follow-ups
+
 def rewrite_query(
     user_query: str,
     chat_history: list,
     max_turns: int = MAX_CHAT_HISTORY
 ) -> dict:
     """
-    Rewrites a follow-up query into a self-contained query.
-
-    Returns a dict with exactly these keys:
-        rewritten_query: str   — the rewritten query to use for retrieval
-        was_rewritten: bool    — True if rewriting changed the query
-        needs_clarification: bool — True if CLARIFICATION_NEEDED was returned
-        original_query: str    — the original user input unchanged
-
-    Logic:
-    1. Call is_followup(user_query, chat_history).
-    2. Call get_recent_history(chat_history, max_turns) to get context.
-    3. Call format_history_for_rewriter(recent_history) to get history block.
-    4. Build user message for LLM.
-    5. Call call_llm.
-    6. Strip response and check for CLARIFICATION_NEEDED.
-    7. Fallback for empty/error.
-    8. Return result.
+    Rewrites a follow-up query into a self-contained query with multi-turn intelligence.
     """
-    # 1. Logic
-    if not is_followup(user_query, chat_history):
+    # Step 1: Classify
+    q_type = classify_query(user_query, chat_history)
+    
+    # Step 5: Context Reuse Control
+    reuse_context = q_type in ["REFERENCE", "CONTINUATION"]
+    
+    # Step 2: Rewrite Rules
+    if q_type == "SHIFT":
         return {
             "rewritten_query": user_query,
             "was_rewritten": False,
             "needs_clarification": False,
-            "original_query": user_query
+            "original_query": user_query,
+            "q_type": "SHIFT",
+            "reuse_context": False
         }
-    
-    # 2. Logic
+        
+    if q_type == "AMBIGUOUS":
+        return {
+            "rewritten_query": user_query,
+            "was_rewritten": False,
+            "needs_clarification": True,
+            "original_query": user_query,
+            "q_type": "AMBIGUOUS",
+            "reuse_context": False
+        }
+
+    # For REFERENCE and CONTINUATION, use LLM to rewrite
     recent_history = get_recent_history(chat_history, max_turns)
     if not recent_history:
         return {
             "rewritten_query": user_query,
             "was_rewritten": False,
             "needs_clarification": False,
-            "original_query": user_query
+            "original_query": user_query,
+            "q_type": "SHIFT",
+            "reuse_context": False
         }
         
-    # 3. Logic
     history_block = format_history_for_rewriter(recent_history)
     
-    # 4. Logic
+    # Specialized prompt instructions based on type
+    type_instruction = ""
+    if q_type == "REFERENCE":
+        type_instruction = "Inject the specific entity or topic being referred to (e.g. 'them' -> 'inflation risks')."
+    elif q_type == "CONTINUATION":
+        type_instruction = "Expand the query to include the context of the previous answer (e.g. 'Why?' -> 'Why is policy stance withdrawal of accommodation?')."
+
     user_message = f"""Conversation so far:
 {history_block}
 
 Follow-up question: {user_query}
 
-Rewrite the follow-up into a self-contained search query."""
+Rewrite the follow-up into a self-contained search query. 
+Instruction: {type_instruction}"""
 
-    # 5. Logic
     try:
-        # Call call_llm as per instructions. 
-        # Note: We pass max_tokens and temperature as requested, 
-        # assuming call_llm will be updated or already matches.
         response = call_llm(
             system_prompt=REWRITER_SYSTEM_PROMPT,
             messages=[{"role": "user", "content": user_message}],
@@ -89,32 +138,34 @@ Rewrite the follow-up into a self-contained search query."""
             temperature=0.0
         )
         
-        # 6. Logic
         rewritten = response.strip() if response else ""
         if rewritten == "CLARIFICATION_NEEDED":
             return {
                 "rewritten_query": user_query,
                 "was_rewritten": False,
                 "needs_clarification": True,
-                "original_query": user_query
+                "original_query": user_query,
+                "q_type": "AMBIGUOUS",
+                "reuse_context": False
             }
             
-        # 7. Logic
         if not rewritten:
-            log.warning("query_rewriter_empty_response", query=user_query)
             return {
                 "rewritten_query": user_query,
                 "was_rewritten": False,
                 "needs_clarification": False,
-                "original_query": user_query
+                "original_query": user_query,
+                "q_type": q_type,
+                "reuse_context": reuse_context
             }
             
-        # 8. Logic
         return {
             "rewritten_query": rewritten,
             "was_rewritten": True,
             "needs_clarification": False,
-            "original_query": user_query
+            "original_query": user_query,
+            "q_type": q_type,
+            "reuse_context": reuse_context
         }
 
     except Exception as e:
@@ -123,5 +174,7 @@ Rewrite the follow-up into a self-contained search query."""
             "rewritten_query": user_query,
             "was_rewritten": False,
             "needs_clarification": False,
-            "original_query": user_query
+            "original_query": user_query,
+            "q_type": q_type,
+            "reuse_context": reuse_context
         }

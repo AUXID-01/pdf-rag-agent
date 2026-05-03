@@ -231,6 +231,7 @@ if prompt := st.chat_input("Ask a question about the document"):
                 full_answer = ""
                 response_type = "refusal"
 
+                gate2_result = None # Initialize for trace
                 if gate.state == "ANSWERABLE":
                     with st.spinner("Generating grounded answer..."):
                         try:
@@ -238,14 +239,22 @@ if prompt := st.chat_input("Ask a question about the document"):
                             raw_answer = call_llm(system_prompt=SYSTEM_PROMPT, messages=messages)
                             parsed = parse_llm_response(raw_answer)
                             gate2_result = validate_citations_against_chunks(parsed, gate.hits)
-
+                            
                             if not gate2_result["passed"]:
-                                st.warning(
-                                    f"The system could not produce a verifiable cited answer. "
-                                    f"Reason: {gate2_result['reason']}"
-                                )
+                                # FIX 1 — ROUTE GATE2 FAILURE → REFUSAL JSON
+                                refusal_data = {
+                                    "state": "OUT_OF_SCOPE",
+                                    "reason": gate2_result["reason"],
+                                    "supported_parts": [],
+                                    "missing_parts": []
+                                }
+                                st.warning(f"**{refusal_data['state']} REFUSAL**")
+                                st.markdown(refusal_data['reason'])
+                                with st.expander("🔍 Refusal Details (Structured)"):
+                                    st.json(refusal_data)
+                                
                                 render_refusal_chip()
-                                full_answer = "[Response blocked — citation validation failed]"
+                                full_answer = refusal_data['reason']
                             else:
                                 processed = post_process_answer(parsed)
                                 
@@ -260,7 +269,12 @@ if prompt := st.chat_input("Ask a question about the document"):
                                 if clean_citations:
                                     source_block = "\n\n**Sources:**\n" + "\n".join([f"[Page {c[0]} | {c[1]}]" for c in clean_citations])
                                 
-                                full_answer = processed["answer_text"] + source_block
+                                # FIX 2 — SAFE PARTIAL ANSWERING
+                                answer_body = processed["answer_text"]
+                                if gate.partial_context:
+                                    answer_body = "The document partially addresses your query. Based on available information:\n\n" + answer_body
+                                
+                                full_answer = answer_body + source_block
                                 st.markdown(full_answer)
                                 response_type = "answer"
                                 render_retrieval_hits(used_hits)
@@ -299,6 +313,17 @@ if prompt := st.chat_input("Ask a question about the document"):
                         "role": "assistant",
                         "content": full_answer,
                     })
+                    # Capture trace before stop
+                    turn_trace = build_trace(
+                        query=prompt,
+                        rewrite_result=rewrite_result,
+                        hits=hits,
+                        gate_result=gate,
+                        response_type=response_type,
+                        citations=clean_citations,
+                        gate2_result=gate2_result
+                    )
+                    add_trace_event(turn_trace)
                     st.stop() # CRITICAL: Terminate pipeline to prevent partial answers
                 
                 # PHASE 11: Capture turn-level trace
@@ -308,7 +333,8 @@ if prompt := st.chat_input("Ask a question about the document"):
                     hits=hits,
                     gate_result=gate,
                     response_type=response_type,
-                    citations=clean_citations
+                    citations=clean_citations,
+                    gate2_result=gate2_result
                 )
                 add_trace_event(turn_trace)
 

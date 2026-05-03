@@ -1,0 +1,18 @@
+{
+  "Test1": {
+    "status": "SUCCESS",
+    "expected": "SUCCESS"
+  },
+  "Test2": {
+    "status": "SUCCESS",
+    "expected": "SUCCESS"
+  },
+  "Test3": {
+    "status": "REFUSED_GATE1_Significant parts of the query are missing from the context.",
+    "expected": "REFUSED_GATE1_Significant parts of the query are missing from the context."
+  },
+  "Test4": {
+    "status": "REFUSED_GATE2",
+    "expected": "REFUSED_GATE2"
+  }
+}

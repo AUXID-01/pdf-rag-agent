@@ -1,0 +1,21 @@
+{
+  "Test1": {
+    "status": "REFUSED_GATE1_No relevant context found for any part of the query.",
+    "state": null
+  },
+  "Test2": {
+    "status": "SUCCESS"
+  },
+  "Test3": {
+    "status": "REFUSED_GATE1_Significant parts of the query are missing from the context."
+  },
+  "Test4": {
+    "status": "REFUSED_GATE1_Numeric Mismatch"
+  },
+  "Test5": {
+    "status": "REFUSED_GATE1_Significant parts of the query are missing from the context."
+  },
+  "Test6": {
+    "status": "REFUSED_GATE1_Query attempts to bypass document grounding."
+  }
+}
