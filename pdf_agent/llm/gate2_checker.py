@@ -25,7 +25,11 @@ def validate_citations_against_chunks(
     if not parsed.citations:
         return {"passed": False, "reason": "No citations found in response."}
 
-    refusal_phrases = ["cannot answer", "don't know", "not sure", "insufficient context", "not mentioned", "not fully supported"]
+    refusal_phrases = [
+        "cannot answer", "don't know", "not sure", "insufficient context", 
+        "not mentioned", "not fully supported", "no information", 
+        "not available", "context does not mention", "does not contain"
+    ]
     if any(p in parsed.answer_text.lower() for p in refusal_phrases):
         return {"passed": False, "reason": "LLM attempted refusal"}
 

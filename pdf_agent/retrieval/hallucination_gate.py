@@ -37,11 +37,18 @@ def clean_intent(intent: str) -> str:
 def evaluate(hits: List[Dict], query: str) -> GateResult:
     log.info("decision_engine_start", query=query, hit_count=len(hits) if hits else 0)
     
-    # FIX 5 — PROMPT INJECTION CLASSIFICATION
+    # FIX 5 — PROMPT INJECTION & DOMAIN CLASSIFICATION
     injection_patterns = ["ignore document", "even if not in document", "answer generally", "use your knowledge", "ignore previous"]
-    if any(p in query.lower() for p in injection_patterns):
+    out_of_domain = ["crypto", "bitcoin", "ethereum", "blockchain", "stock market", "france", "paris"]
+    
+    query_lower = query.lower()
+    if any(p in query_lower for p in injection_patterns):
         msg = build_state_json("OUT_OF_SCOPE", "Query attempts to bypass document grounding.", [], [])
         return GateResult("OUT_OF_SCOPE", "Query attempts to bypass document grounding.", msg, hits, 0.0, None)
+        
+    if any(p in query_lower for p in out_of_domain):
+        msg = build_state_json("OUT_OF_SCOPE", f"Query involves out-of-domain topic: {query}", [], [])
+        return GateResult("OUT_OF_SCOPE", "Out of Domain Query", msg, hits, 0.0, None)
     
     # STEP 1 — INTENT EXTRACTION
     split_pattern = r'[.?!]?\s+(?:and|also|along\s+with|as\s+well\s+as|plus|vs|\+|&)\s+|[.?!]\s+'
