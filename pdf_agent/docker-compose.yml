@@ -1,0 +1,46 @@
+version: '3.8'
+
+services:
+  pdf-agent:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: pdf_agent
+    ports:
+      - "8501:8501"  # Streamlit UI
+    volumes:
+      - ./data/uploads:/app/data/uploads          # Uploaded PDFs
+      - ./data/chroma_db:/app/data/chroma_db      # Vector DB persistence
+      - ./data/logs:/app/data/logs                # Application logs
+    environment:
+      - GROQ_API_KEY=${GROQ_API_KEY}
+      - CHUNK_SIZE=800
+      - CHUNK_OVERLAP=100
+      - TOP_K=10
+      - SIMILARITY_THRESHOLD=0.28
+      - SCATTER_THRESHOLD=0.15
+      - MAX_CHAT_HISTORY=10
+      - CHROMA_PERSIST_DIR=/app/data/chroma_db
+      - CHROMA_COLLECTION_NAME=pdf_agent_collection
+      - EMBEDDING_MODEL=all-MiniLM-L6-v2
+      - LLM_MODEL=llama-3.3-70b-versatile
+      - LLM_MAX_TOKENS=1024
+      - LOG_LEVEL=INFO
+      - LOG_FILE=/app/data/logs/agent.jsonl
+      - UPLOAD_DIR=/app/data/uploads
+      - RERANKER_MODEL=all-MiniLM-L6-v2
+      - RERANKER_TOP_K=5
+      - RERANKER_THRESHOLD=0.25
+    restart: unless-stopped
+    networks:
+      - pdf-agent-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8501/_stcore/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+networks:
+  pdf-agent-network:
+    driver: bridge

@@ -64,7 +64,53 @@ A production-grade, evaluator-centric RAG system designed for high-accuracy docu
 
 ---
 
-## 🖥️ Usage
+## � Docker Deployment
+
+### Quick Start with Docker Compose
+
+For easy containerized deployment without manual setup:
+
+1. **Set up environment**:
+   ```bash
+   cp .env.example .env
+   # Edit .env and add your Groq API key
+   ```
+
+2. **Build and run**:
+   ```bash
+   docker-compose up -d
+   ```
+
+3. **Access the app**:
+   Open http://localhost:8501
+
+4. **Stop the app**:
+   ```bash
+   docker-compose down
+   ```
+
+### Manual Docker Build
+
+```bash
+# Build the image
+docker build -t pdf-agent:latest .
+
+# Run the container
+docker run -p 8501:8501 \
+  -v $(pwd)/data:/app/data \
+  -e GROQ_API_KEY="your_api_key" \
+  pdf-agent:latest
+```
+
+For detailed deployment guides, see [DOCKER.md](./DOCKER.md) for:
+- Production deployment
+- Cloud platforms (AWS ECS, Google Cloud Run, etc.)
+- Advanced configuration
+- Troubleshooting
+
+---
+
+## �🖥️ Usage
 
 1. **Run the App**:
    ```bash
